@@ -77,7 +77,7 @@ func (mr *MockBpfMapAPIsMockRecorder) BulkUpdateMapEntry(arg0 interface{}) *gomo
 }
 
 // CreateBPFMap mocks base method.
-func (m *MockBpfMapAPIs) CreateBPFMap(arg0 maps.BpfMapData) (maps.BpfMap, error) {
+func (m *MockBpfMapAPIs) CreateBPFMap(arg0 maps.CreateEBPFMapInput) (maps.BpfMap, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "CreateBPFMap", arg0)
 	ret0, _ := ret[0].(maps.BpfMap)
@@ -191,17 +191,17 @@ func (mr *MockBpfMapAPIsMockRecorder) GetNextMapEntry(arg0, arg1 interface{}) *g
 }
 
 // PinMap mocks base method.
-func (m *MockBpfMapAPIs) PinMap(arg0 string) error {
+func (m *MockBpfMapAPIs) PinMap(arg0 string, arg1 uint32) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "PinMap", arg0)
+	ret := m.ctrl.Call(m, "PinMap", arg0, arg1)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // PinMap indicates an expected call of PinMap.
-func (mr *MockBpfMapAPIsMockRecorder) PinMap(arg0 interface{}) *gomock.Call {
+func (mr *MockBpfMapAPIsMockRecorder) PinMap(arg0, arg1 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "PinMap", reflect.TypeOf((*MockBpfMapAPIs)(nil).PinMap), arg0)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "PinMap", reflect.TypeOf((*MockBpfMapAPIs)(nil).PinMap), arg0, arg1)
 }
 
 // UnPinMap mocks base method.

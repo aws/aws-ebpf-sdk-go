@@ -53,7 +53,7 @@ func TestLoadelf(t *testing.T) {
 
 	mockAPIs.EXPECT().CreateBPFMap(gomock.Any()).AnyTimes()
 	mockProgAPIs.EXPECT().LoadProg(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).AnyTimes()
-	mockAPIs.EXPECT().PinMap(gomock.Any()).AnyTimes()
+	mockAPIs.EXPECT().PinMap(gomock.Any(), gomock.Any()).AnyTimes()
 	mockAPIs.EXPECT().GetMapFromPinPath(gomock.Any()).AnyTimes()
 	mockProgAPIs.EXPECT().BpfGetProgFromPinPath(gomock.Any()).AnyTimes()
 	mockProgAPIs.EXPECT().GetBPFProgAssociatedMapsIDs(gomock.Any()).AnyTimes()
@@ -74,7 +74,7 @@ func TestLoadelfWithoutReloc(t *testing.T) {
 
 	mockAPIs.EXPECT().CreateBPFMap(gomock.Any()).AnyTimes()
 	mockProgAPIs.EXPECT().LoadProg(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).AnyTimes()
-	mockAPIs.EXPECT().PinMap(gomock.Any()).AnyTimes()
+	mockAPIs.EXPECT().PinMap(gomock.Any(), gomock.Any()).AnyTimes()
 	mockAPIs.EXPECT().GetMapFromPinPath(gomock.Any()).AnyTimes()
 	mockProgAPIs.EXPECT().BpfGetProgFromPinPath(gomock.Any()).AnyTimes()
 	mockProgAPIs.EXPECT().GetBPFProgAssociatedMapsIDs(gomock.Any()).AnyTimes()
@@ -95,7 +95,7 @@ func TestLoadelfWithoutProg(t *testing.T) {
 
 	mockAPIs.EXPECT().CreateBPFMap(gomock.Any()).AnyTimes()
 	mockProgAPIs.EXPECT().LoadProg(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).AnyTimes()
-	mockAPIs.EXPECT().PinMap(gomock.Any()).AnyTimes()
+	mockAPIs.EXPECT().PinMap(gomock.Any(), gomock.Any()).AnyTimes()
 	mockAPIs.EXPECT().GetMapFromPinPath(gomock.Any()).AnyTimes()
 	mockProgAPIs.EXPECT().BpfGetProgFromPinPath(gomock.Any()).AnyTimes()
 	mockProgAPIs.EXPECT().GetBPFProgAssociatedMapsIDs(gomock.Any()).AnyTimes()

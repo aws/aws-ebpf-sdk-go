@@ -83,7 +83,7 @@ func LoadBpfFile(path, customizedPinPath string) (map[string]BPFdata, map[string
 
 func loadElfMapsSection(mapsShndx int, dataMaps *elf.Section, elfFile *elf.File, bpfMapApi ebpf_maps.BpfMapAPIs, customizedPinPath string) (map[string]ebpf_maps.BpfMap, error) {
 	mapDefinitionSize := bpfMapDefSize
-	GlobalMapData := []ebpf_maps.BpfMapData{}
+	GlobalMapData := []ebpf_maps.CreateEBPFMapInput{}
 	foundMaps := make(map[string]ebpf_maps.BpfMap)
 
 	data, err := dataMaps.Data()
@@ -99,15 +99,18 @@ func loadElfMapsSection(mapsShndx int, dataMaps *elf.Section, elfFile *elf.File,
 	}
 
 	for offset := 0; offset < len(data); offset += mapDefinitionSize {
-		mapData := ebpf_maps.BpfMapData{}
-		mapDef := ebpf_maps.BpfMapDef{
+		mapData := ebpf_maps.CreateEBPFMapInput{
 			Type:       uint32(binary.LittleEndian.Uint32(data[offset : offset+4])),
 			KeySize:    uint32(binary.LittleEndian.Uint32(data[offset+4 : offset+8])),
 			ValueSize:  uint32(binary.LittleEndian.Uint32(data[offset+8 : offset+12])),
 			MaxEntries: uint32(binary.LittleEndian.Uint32(data[offset+12 : offset+16])),
 			Flags:      uint32(binary.LittleEndian.Uint32(data[offset+16 : offset+20])),
-			Pinning:    uint32(binary.LittleEndian.Uint32(data[offset+20 : offset+24])),
 		}
+		pinOptions := ebpf_maps.BpfMapPinOptions{
+			Type: uint32(binary.LittleEndian.Uint32(data[offset+20 : offset+24])),
+		}
+
+		mapData.PinOptions = &pinOptions
 
 		for _, sym := range symbols {
 			if int(sym.Section) == mapsShndx && int(sym.Value) == offset {
@@ -116,7 +119,7 @@ func loadElfMapsSection(mapsShndx int, dataMaps *elf.Section, elfFile *elf.File,
 			}
 		}
 		log.Infof("Found map name %s", mapData.Name)
-		mapData.Def = mapDef
+		//mapData.Def = mapDef
 		GlobalMapData = append(GlobalMapData, mapData)
 	}
 
@@ -126,22 +129,21 @@ func loadElfMapsSection(mapsShndx int, dataMaps *elf.Section, elfFile *elf.File,
 		log.Infof("Loading maps")
 		loadedMaps := GlobalMapData[index]
 
-		bpfMap, err := (bpfMapApi).CreateBPFMap(loadedMaps)
-		if err != nil {
-			//Even if one map fails, we error out
-			log.Infof("Failed to create map, continue to next map..just for debugging")
-			continue
-		}
-
+		//Get Pinning info
 		mapNameStr := loadedMaps.Name
 		if len(customizedPinPath) != 0 {
 			mapNameStr = customizedPinPath + "_" + mapNameStr
 		}
 
 		pinPath := constdef.MAP_BPF_FS + mapNameStr
+		loadedMaps.PinOptions.PinPath = pinPath
 
-		log.Infof("Pinpath ", pinPath)
-		bpfMap.PinMap(pinPath)
+		bpfMap, err := (bpfMapApi).CreateBPFMap(loadedMaps)
+		if err != nil {
+			//Even if one map fails, we error out
+			log.Infof("Failed to create map, continue to next map..just for debugging")
+			continue
+		}
 
 		//Fill ID
 		mapInfo, err := (bpfMapApi).GetMapFromPinPath(pinPath)
@@ -588,15 +590,13 @@ func RecoverGlobalMaps() (map[string]ebpf_maps.BpfMap, error) {
 					recoveredBpfMap.MapFD = uint32(mapFD)
 					log.Infof("Recovered FD %d", mapFD)
 					//Fill BPF map metadata
-					recoveredBpfMapMetaData := ebpf_maps.BpfMapData{
-						Def: ebpf_maps.BpfMapDef{
-							Type:       bpfMapInfo.Type,
-							KeySize:    bpfMapInfo.KeySize,
-							ValueSize:  bpfMapInfo.ValueSize,
-							MaxEntries: bpfMapInfo.MaxEntries,
-							Flags:      bpfMapInfo.MapFlags,
-						},
-						Name: mapName,
+					recoveredBpfMapMetaData := ebpf_maps.CreateEBPFMapInput{
+						Type:       bpfMapInfo.Type,
+						KeySize:    bpfMapInfo.KeySize,
+						ValueSize:  bpfMapInfo.ValueSize,
+						MaxEntries: bpfMapInfo.MaxEntries,
+						Flags:      bpfMapInfo.MapFlags,
+						Name:       mapName,
 					}
 					recoveredBpfMap.MapMetaData = recoveredBpfMapMetaData
 					loadedGlobalMaps[pinPath] = recoveredBpfMap
@@ -744,15 +744,13 @@ func RecoverAllBpfProgramsAndMaps() (map[string]BPFdata, error) {
 
 							log.Infof("Mapinfo MapName - %v", bpfMapInfo.Name)
 							//Fill BPF map metadata
-							recoveredBpfMapMetaData := ebpf_maps.BpfMapData{
-								Def: ebpf_maps.BpfMapDef{
-									Type:       bpfMapInfo.Type,
-									KeySize:    bpfMapInfo.KeySize,
-									ValueSize:  bpfMapInfo.ValueSize,
-									MaxEntries: bpfMapInfo.MaxEntries,
-									Flags:      bpfMapInfo.MapFlags,
-								},
-								Name: mapName,
+							recoveredBpfMapMetaData := ebpf_maps.CreateEBPFMapInput{
+								Type:       bpfMapInfo.Type,
+								KeySize:    bpfMapInfo.KeySize,
+								ValueSize:  bpfMapInfo.ValueSize,
+								MaxEntries: bpfMapInfo.MaxEntries,
+								Flags:      bpfMapInfo.MapFlags,
+								Name:       mapName,
 							}
 							recoveredBpfMap.MapMetaData = recoveredBpfMapMetaData
 							recoveredMapData[mapName] = recoveredBpfMap

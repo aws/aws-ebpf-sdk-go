@@ -33,7 +33,24 @@ var log = logger.Get()
 type BpfMap struct {
 	MapFD       uint32
 	MapID       uint32
-	MapMetaData BpfMapData
+	MapMetaData CreateEBPFMapInput
+}
+
+type BpfMapPinOptions struct {
+	Type    uint32
+	PinPath string
+}
+
+type CreateEBPFMapInput struct {
+	Type       uint32
+	KeySize    uint32
+	ValueSize  uint32
+	MaxEntries uint32
+	Flags      uint32
+	InnerMapFd uint32
+	PinOptions *BpfMapPinOptions
+	NumaNode   uint32
+	Name       string
 }
 
 /*
@@ -45,6 +62,7 @@ type BpfMap struct {
  * InnerMapFd: Map in map functionality
  * Pinning: if pinning is needed or not
  */
+
 type BpfMapDef struct {
 	Type       uint32
 	KeySize    uint32
@@ -55,7 +73,7 @@ type BpfMapDef struct {
 	Pinning    uint32
 }
 
-type BpfMapData struct {
+type bpfAttrBPFMapCreate struct {
 	Def      BpfMapDef
 	NumaNode uint32
 	Name     string
@@ -130,9 +148,9 @@ type BpfObjGet struct {
 
 type BpfMapAPIs interface {
 	// Wrapper for BPF_MAP_CREATE API
-	CreateBPFMap(mapMetaData BpfMapData) (BpfMap, error)
+	CreateBPFMap(mapMetaData CreateEBPFMapInput) (BpfMap, error)
 	// Pin map to the passed pinPath
-	PinMap(pinPath string) error
+	PinMap(pinPath string, pinType uint32) error
 	// Delete pinPath
 	UnPinMap(pinPath string) error
 	// Add an entry to map, if the entry exists, we error out
@@ -159,16 +177,16 @@ type BpfMapAPIs interface {
 	GetMapFromPinPath(pinPath string) (BpfMapInfo, error)
 }
 
-func (m *BpfMap) CreateBPFMap(MapMetaData BpfMapData) (BpfMap, error) {
+func (m *BpfMap) CreateBPFMap(MapMetaData CreateEBPFMapInput) (BpfMap, error) {
 
 	// Copying all contents, innerMapFD is 0 since we don't support map-in-map
-	mapContents := BpfMapData{
+	mapContents := bpfAttrBPFMapCreate{
 		Def: BpfMapDef{
-			Type:       uint32(MapMetaData.Def.Type),
-			KeySize:    MapMetaData.Def.KeySize,
-			ValueSize:  MapMetaData.Def.ValueSize,
-			MaxEntries: MapMetaData.Def.MaxEntries,
-			Flags:      MapMetaData.Def.Flags,
+			Type:       uint32(MapMetaData.Type),
+			KeySize:    MapMetaData.KeySize,
+			ValueSize:  MapMetaData.ValueSize,
+			MaxEntries: MapMetaData.MaxEntries,
+			Flags:      MapMetaData.Flags,
 			InnerMapFd: 0,
 		},
 		Name: MapMetaData.Name,
@@ -176,7 +194,7 @@ func (m *BpfMap) CreateBPFMap(MapMetaData BpfMapData) (BpfMap, error) {
 	mapData := unsafe.Pointer(&mapContents)
 	mapDataSize := unsafe.Sizeof(mapContents)
 
-	log.Infof("Calling BPFsys for name %s mapType %d keysize %d valuesize %d max entries %d and flags %d", string(MapMetaData.Name[:]), MapMetaData.Def.Type, MapMetaData.Def.KeySize, MapMetaData.Def.ValueSize, MapMetaData.Def.MaxEntries, MapMetaData.Def.Flags)
+	log.Infof("Calling BPFsys for name %s mapType %d keysize %d valuesize %d max entries %d and flags %d", string(MapMetaData.Name[:]), MapMetaData.Type, MapMetaData.KeySize, MapMetaData.ValueSize, MapMetaData.MaxEntries, MapMetaData.Flags)
 
 	ret, _, errno := unix.Syscall(
 		unix.SYS_BPF,
@@ -196,15 +214,19 @@ func (m *BpfMap) CreateBPFMap(MapMetaData BpfMapData) (BpfMap, error) {
 		MapFD:       uint32(ret),
 		MapMetaData: MapMetaData,
 	}
+
+	if MapMetaData.PinOptions != nil {
+		m.PinMap(MapMetaData.PinOptions.PinPath, MapMetaData.Type)
+	}
 	return bpfMap, nil
 }
 
-func (m *BpfMap) PinMap(pinPath string) error {
-	if m.MapMetaData.Def.Pinning == constdef.PIN_NONE {
+func (m *BpfMap) PinMap(pinPath string, pinType uint32) error {
+	if pinType == constdef.PIN_NONE {
 		return nil
 	}
 
-	if m.MapMetaData.Def.Pinning == constdef.PIN_GLOBAL_NS {
+	if pinType == constdef.PIN_GLOBAL_NS {
 
 		//If pinPath is already present lets delete and create a new one
 		if utils.IsfileExists(pinPath) {
@@ -359,7 +381,7 @@ func (m *BpfMap) GetNextMapEntry(key, nextKey uintptr) error {
 
 func (m *BpfMap) GetAllMapKeys() ([]string, error) {
 	var keyList []string
-	keySize := m.MapMetaData.Def.KeySize
+	keySize := m.MapMetaData.KeySize
 
 	curKey := make([]byte, keySize)
 	nextKey := make([]byte, keySize)
