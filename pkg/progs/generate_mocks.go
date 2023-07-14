@@ -10,6 +10,6 @@
 // on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either
 // express or implied. See the License for the specific language governing
 // permissions and limitations under the License.
-package ebpf_maps
+package progs
 
-//go:generate go run github.com/golang/mock/mockgen -destination mocks/ebpf_mocks.go . BpfMapAPIs
+//go:generate go run github.com/golang/mock/mockgen -destination mocks/ebpf_mocks.go . BpfProgAPIs

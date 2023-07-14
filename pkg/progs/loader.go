@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 //limitations under the License.
 
-package ebpf_progs
+package progs
 
 import (
 	"fmt"
@@ -22,8 +22,9 @@ import (
 	"syscall"
 	"unsafe"
 
-	"github.com/aws/aws-ebpf-sdk-go/pkg/ebpf_maps"
+	constdef "github.com/aws/aws-ebpf-sdk-go/pkg/constants"
 	"github.com/aws/aws-ebpf-sdk-go/pkg/logger"
+	ebpf_maps "github.com/aws/aws-ebpf-sdk-go/pkg/maps"
 	"github.com/aws/aws-ebpf-sdk-go/pkg/utils"
 	"github.com/vishvananda/netlink"
 	"golang.org/x/sys/unix"
@@ -52,7 +53,7 @@ type BPFProgram struct {
 type BpfProgInfo struct {
 	Type                 uint32
 	ID                   uint32
-	Tag                  [utils.BPFTagSize]byte
+	Tag                  [constdef.BPFTagSize]byte
 	JitedProgLen         uint32
 	XlatedProgLen        uint32
 	JitedProgInsns       uint64
@@ -61,7 +62,7 @@ type BpfProgInfo struct {
 	CreatedByUID         uint32
 	NrMapIDs             uint32
 	MapIDs               uint64
-	Name                 [utils.BPFObjNameLen]byte
+	Name                 [constdef.BPFObjNameLen]byte
 	IfIndex              uint32
 	GPLCompatible        uint32 `strcut:"bitfield"`
 	Pad                  uint32 `strcut:"pad"`
@@ -122,7 +123,7 @@ type BpfObjGet struct {
 
 func mount_bpf_fs() error {
 	log.Infof("Let's mount BPF FS")
-	err := syscall.Mount("bpf", utils.BPF_DIR_MNT, "bpf", 0, "mode=0700")
+	err := syscall.Mount("bpf", constdef.BPF_DIR_MNT, "bpf", 0, "mode=0700")
 	if err != nil {
 		log.Errorf("error mounting bpffs: %v", err)
 	}
@@ -207,7 +208,7 @@ func (m *BPFProgram) LoadProg(progType string, data []byte, licenseStr string, p
 	program.License = uintptr(unsafe.Pointer(&license[0]))
 
 	fd, _, errno := unix.Syscall(unix.SYS_BPF,
-		utils.BPF_PROG_LOAD,
+		uintptr(constdef.BPF_PROG_LOAD),
 		uintptr(unsafe.Pointer(&program)),
 		unsafe.Sizeof(program))
 	runtime.KeepAlive(data)
@@ -231,7 +232,7 @@ func (m *BPFProgram) LoadProg(progType string, data []byte, licenseStr string, p
 func (attr *BpfProgAttr) isBpfProgGetNextID() bool {
 	ret, _, errno := unix.Syscall(
 		unix.SYS_BPF,
-		utils.BPF_PROG_GET_NEXT_ID,
+		uintptr(constdef.BPF_PROG_GET_NEXT_ID),
 		uintptr(unsafe.Pointer(attr)),
 		unsafe.Sizeof(*attr),
 	)
@@ -247,7 +248,7 @@ func (attr *BpfProgAttr) isBpfProgGetNextID() bool {
 func (attr *BpfProgAttr) BpfProgGetFDbyID() (int, error) {
 	ret, _, errno := unix.Syscall(
 		unix.SYS_BPF,
-		utils.BPF_PROG_GET_FD_BY_ID,
+		uintptr(constdef.BPF_PROG_GET_FD_BY_ID),
 		uintptr(unsafe.Pointer(attr)),
 		unsafe.Sizeof(*attr),
 	)
@@ -261,7 +262,7 @@ func (attr *BpfProgAttr) BpfProgGetFDbyID() (int, error) {
 func (objattr *BpfObjGetInfo) BpfGetProgramInfoForFD() error {
 	ret, _, errno := unix.Syscall(
 		unix.SYS_BPF,
-		utils.BPF_OBJ_GET_INFO_BY_FD,
+		uintptr(constdef.BPF_OBJ_GET_INFO_BY_FD),
 		uintptr(unsafe.Pointer(objattr)),
 		unsafe.Sizeof(*objattr),
 	)
@@ -397,7 +398,7 @@ func BpfGetAllProgramInfo() ([]BpfProgInfo, error) {
 func (attr *BpfObjGet) BpfGetObject() (int, error) {
 	ret, _, errno := unix.Syscall(
 		unix.SYS_BPF,
-		utils.BPF_OBJ_GET,
+		uintptr(constdef.BPF_OBJ_GET),
 		uintptr(unsafe.Pointer(attr)),
 		unsafe.Sizeof(*attr),
 	)

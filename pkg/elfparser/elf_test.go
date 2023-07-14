@@ -18,8 +18,8 @@ import (
 	"os"
 	"testing"
 
-	mock_ebpf_maps "github.com/aws/aws-ebpf-sdk-go/pkg/ebpf_maps/mocks"
-	mock_ebpf_progs "github.com/aws/aws-ebpf-sdk-go/pkg/ebpf_progs/mocks"
+	mock_ebpf_maps "github.com/aws/aws-ebpf-sdk-go/pkg/maps/mocks"
+	mock_ebpf_progs "github.com/aws/aws-ebpf-sdk-go/pkg/progs/mocks"
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/assert"
 )
@@ -51,10 +51,10 @@ func TestLoadelf(t *testing.T) {
 	mockAPIs := mock_ebpf_maps.NewMockBpfMapAPIs(ctrl)
 	mockProgAPIs := mock_ebpf_progs.NewMockBpfProgAPIs(ctrl)
 
-	mockAPIs.EXPECT().CreateMap(gomock.Any()).AnyTimes()
+	mockAPIs.EXPECT().CreateBPFMap(gomock.Any()).AnyTimes()
 	mockProgAPIs.EXPECT().LoadProg(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).AnyTimes()
 	mockAPIs.EXPECT().PinMap(gomock.Any()).AnyTimes()
-	mockAPIs.EXPECT().BpfGetMapFromPinPath(gomock.Any()).AnyTimes()
+	mockAPIs.EXPECT().GetMapFromPinPath(gomock.Any()).AnyTimes()
 	mockProgAPIs.EXPECT().BpfGetProgFromPinPath(gomock.Any()).AnyTimes()
 	mockProgAPIs.EXPECT().GetBPFProgAssociatedMapsIDs(gomock.Any()).AnyTimes()
 
@@ -72,10 +72,10 @@ func TestLoadelfWithoutReloc(t *testing.T) {
 	mockAPIs := mock_ebpf_maps.NewMockBpfMapAPIs(ctrl)
 	mockProgAPIs := mock_ebpf_progs.NewMockBpfProgAPIs(ctrl)
 
-	mockAPIs.EXPECT().CreateMap(gomock.Any()).AnyTimes()
+	mockAPIs.EXPECT().CreateBPFMap(gomock.Any()).AnyTimes()
 	mockProgAPIs.EXPECT().LoadProg(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).AnyTimes()
 	mockAPIs.EXPECT().PinMap(gomock.Any()).AnyTimes()
-	mockAPIs.EXPECT().BpfGetMapFromPinPath(gomock.Any()).AnyTimes()
+	mockAPIs.EXPECT().GetMapFromPinPath(gomock.Any()).AnyTimes()
 	mockProgAPIs.EXPECT().BpfGetProgFromPinPath(gomock.Any()).AnyTimes()
 	mockProgAPIs.EXPECT().GetBPFProgAssociatedMapsIDs(gomock.Any()).AnyTimes()
 
@@ -93,10 +93,10 @@ func TestLoadelfWithoutProg(t *testing.T) {
 	mockAPIs := mock_ebpf_maps.NewMockBpfMapAPIs(ctrl)
 	mockProgAPIs := mock_ebpf_progs.NewMockBpfProgAPIs(ctrl)
 
-	mockAPIs.EXPECT().CreateMap(gomock.Any()).AnyTimes()
+	mockAPIs.EXPECT().CreateBPFMap(gomock.Any()).AnyTimes()
 	mockProgAPIs.EXPECT().LoadProg(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).AnyTimes()
 	mockAPIs.EXPECT().PinMap(gomock.Any()).AnyTimes()
-	mockAPIs.EXPECT().BpfGetMapFromPinPath(gomock.Any()).AnyTimes()
+	mockAPIs.EXPECT().GetMapFromPinPath(gomock.Any()).AnyTimes()
 	mockProgAPIs.EXPECT().BpfGetProgFromPinPath(gomock.Any()).AnyTimes()
 	mockProgAPIs.EXPECT().GetBPFProgAssociatedMapsIDs(gomock.Any()).AnyTimes()
 
