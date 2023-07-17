@@ -222,11 +222,11 @@ func (m *BpfMap) CreateBPFMap(MapMetaData CreateEBPFMapInput) (BpfMap, error) {
 }
 
 func (m *BpfMap) PinMap(pinPath string, pinType uint32) error {
-	if pinType == constdef.PIN_NONE {
+	if pinType == constdef.PIN_NONE.Index() {
 		return nil
 	}
 
-	if pinType == constdef.PIN_GLOBAL_NS {
+	if pinType == constdef.PIN_GLOBAL_NS.Index() {
 
 		//If pinPath is already present lets delete and create a new one
 		if utils.IsfileExists(pinPath) {
