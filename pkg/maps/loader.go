@@ -205,7 +205,7 @@ func (m *BpfMap) CreateBPFMap(MapMetaData CreateEBPFMapInput) (BpfMap, error) {
 
 	if (errno < 0) || (int(ret) == -1) {
 		log.Errorf("Unable to create map and ret %d and err %s", int(ret), errno)
-		return BpfMap{}, fmt.Errorf("Unable to create map: %s", errno)
+		return BpfMap{}, fmt.Errorf("unable to create map: %s", errno)
 	}
 
 	log.Infof("Create map done with fd : %d", int(ret))
@@ -216,7 +216,7 @@ func (m *BpfMap) CreateBPFMap(MapMetaData CreateEBPFMapInput) (BpfMap, error) {
 	}
 
 	if MapMetaData.PinOptions != nil {
-		m.PinMap(MapMetaData.PinOptions.PinPath, MapMetaData.Type)
+		bpfMap.PinMap(MapMetaData.PinOptions.PinPath, MapMetaData.PinOptions.Type)
 	}
 	return bpfMap, nil
 }
@@ -233,7 +233,7 @@ func (m *BpfMap) PinMap(pinPath string, pinType uint32) error {
 			log.Infof("Found file %s so deleting the path", pinPath)
 			err := utils.UnPinObject(pinPath)
 			if err != nil {
-				log.Errorf("Failed to UnPinObject %v", err)
+				log.Errorf("failed to UnPinObject %v", err)
 				return err
 			}
 		}
@@ -262,11 +262,11 @@ func (m *BpfMap) PinMap(pinPath string, pinType uint32) error {
 func (m *BpfMap) UnPinMap(pinPath string) error {
 	err := utils.UnPinObject(pinPath)
 	if err != nil {
-		log.Errorf("Failed to unpin map")
+		log.Errorf("failed to unpin map")
 		return err
 	}
 	if m.MapFD <= 0 {
-		log.Errorf("FD is invalid or closed %d", m.MapFD)
+		log.Errorf("map FD is invalid or closed %d", m.MapFD)
 		return nil
 	}
 	return unix.Close(int(m.MapFD))
@@ -284,8 +284,8 @@ func (m *BpfMap) CreateUpdateMapEntry(key, value uintptr, updateFlags uint64) er
 
 	mapFD, err := utils.GetMapFDFromID(int(m.MapID))
 	if err != nil {
-		log.Errorf("Unable to GetMapFDfromID and ret %d and err %s", int(mapFD), err)
-		return fmt.Errorf("Unable to get FD: %s", err)
+		log.Errorf("unable to GetMapFDfromID and ret %d and err %s", int(mapFD), err)
+		return fmt.Errorf("unable to get FD: %s", err)
 	}
 
 	attr := utils.BpfMapAttr{
@@ -304,8 +304,8 @@ func (m *BpfMap) CreateUpdateMapEntry(key, value uintptr, updateFlags uint64) er
 	runtime.KeepAlive(value)
 
 	if errno != 0 {
-		log.Errorf("Unable to create/update map entry and ret %d and err %s", int(ret), errno)
-		return fmt.Errorf("Unable to update map: %s", errno)
+		log.Errorf("unable to create/update map entry and ret %d and err %s", int(ret), errno)
+		return fmt.Errorf("unable to update map: %s", errno)
 	}
 
 	log.Infof("Create/Update map entry done with fd : %d and err %s", int(ret), errno)
@@ -317,8 +317,8 @@ func (m *BpfMap) DeleteMapEntry(key uintptr) error {
 
 	mapFD, err := utils.GetMapFDFromID(int(m.MapID))
 	if err != nil {
-		log.Errorf("Unable to GetMapFDfromID and ID %d and err %s", int(m.MapID), err)
-		return fmt.Errorf("Unable to get FD: %s", err)
+		log.Errorf("unable to GetMapFDfromID and ID %d and err %s", int(m.MapID), err)
+		return fmt.Errorf("unable to get FD: %s", err)
 	}
 	attr := utils.BpfMapAttr{
 		MapFD: uint32(mapFD),
@@ -331,8 +331,8 @@ func (m *BpfMap) DeleteMapEntry(key uintptr) error {
 		unsafe.Sizeof(attr),
 	)
 	if errno != 0 {
-		log.Errorf("Unable to delete map entry and ret %d and err %s", int(ret), errno)
-		return fmt.Errorf("Unable to update map: %s", errno)
+		log.Errorf("unable to delete map entry and ret %d and err %s", int(ret), errno)
+		return fmt.Errorf("unable to update map: %s", errno)
 	}
 
 	log.Infof("Delete map entry done with fd : %d and err %s", int(ret), errno)
@@ -349,8 +349,8 @@ func (m *BpfMap) GetNextMapEntry(key, nextKey uintptr) error {
 
 	mapFD, err := utils.GetMapFDFromID(int(m.MapID))
 	if err != nil {
-		log.Errorf("Unable to GetMapFDfromID and ret %d and err %s", int(mapFD), err)
-		return fmt.Errorf("Unable to get FD: %s", err)
+		log.Errorf("unable to GetMapFDfromID and ret %d and err %s", int(mapFD), err)
+		return fmt.Errorf("unable to get FD: %s", err)
 	}
 	attr := utils.BpfMapAttr{
 		MapFD: uint32(mapFD),
@@ -364,14 +364,14 @@ func (m *BpfMap) GetNextMapEntry(key, nextKey uintptr) error {
 		unsafe.Sizeof(attr),
 	)
 	if errors.Is(errno, unix.ENOENT) {
-		log.Errorf("Last entry read done")
+		log.Errorf("last entry read done")
 		unix.Close(mapFD)
 		return errno
 	}
 	if errno != 0 {
-		log.Errorf("Unable to get next map entry and ret %d and err %s", int(ret), errno)
+		log.Errorf("unable to get next map entry and ret %d and err %s", int(ret), errno)
 		unix.Close(mapFD)
-		return fmt.Errorf("Unable to get next map entry: %s", errno)
+		return fmt.Errorf("unable to get next map entry: %s", errno)
 	}
 
 	log.Infof("Got next map entry with fd : %d and err %s", int(ret), errno)
@@ -388,8 +388,8 @@ func (m *BpfMap) GetAllMapKeys() ([]string, error) {
 
 	err := m.GetFirstMapEntry(uintptr(unsafe.Pointer(&curKey[0])))
 	if err != nil {
-		log.Errorf("Unable to get first key %s", err)
-		return nil, fmt.Errorf("Unable to get first key entry: %s", err)
+		log.Errorf("unable to get first key %s", err)
+		return nil, fmt.Errorf("unable to get first key entry: %s", err)
 	} else {
 		for {
 			err = m.GetNextMapEntry(uintptr(unsafe.Pointer(&curKey[0])), uintptr(unsafe.Pointer(&nextKey[0])))
@@ -415,8 +415,8 @@ func (m *BpfMap) GetMapEntry(key, value uintptr) error {
 
 	mapFD, err := utils.GetMapFDFromID(int(m.MapID))
 	if err != nil {
-		log.Errorf("Unable to GetMapFDfromID and ret %d and err %s", int(mapFD), err)
-		return fmt.Errorf("Unable to get FD: %s", err)
+		log.Errorf("unable to GetMapFDfromID and ret %d and err %s", int(mapFD), err)
+		return fmt.Errorf("unable to get FD: %s", err)
 	}
 	attr := utils.BpfMapAttr{
 		MapFD: uint32(mapFD),
@@ -430,9 +430,9 @@ func (m *BpfMap) GetMapEntry(key, value uintptr) error {
 		unsafe.Sizeof(attr),
 	)
 	if errno != 0 {
-		log.Errorf("Unable to get map entry and ret %d and err %s", int(ret), errno)
+		log.Errorf("unable to get map entry and ret %d and err %s", int(ret), errno)
 		unix.Close(mapFD)
-		return fmt.Errorf("Unable to get next map entry: %s", errno)
+		return fmt.Errorf("unable to get next map entry: %s", errno)
 	}
 
 	log.Infof("Got map entry with fd : %d and err %s", int(ret), errno)
@@ -454,7 +454,7 @@ func (m *BpfMap) BulkDeleteMapEntry(keyvalue map[uintptr]uintptr) error {
 
 func (m *BpfMap) BulkUpdateMapEntry(keyvalue map[uintptr]uintptr) error {
 	for k, v := range keyvalue {
-		log.Errorf("Key being programmed - in bytearray ", *((*uint64)(unsafe.Pointer(k))))
+		log.Errorf("key being programmed - in bytearray ", *((*uint64)(unsafe.Pointer(k))))
 		err := m.UpdateMapEntry(k, v)
 		if err != nil {
 			log.Infof("One of the element update failed hence returning from bulk update")
@@ -480,14 +480,14 @@ func (m *BpfMap) BulkRefreshMapEntries(newMapContents map[string]uintptr) error 
 	// 2. Update all map entries
 	err := m.BulkUpdateMapEntry(keyvaluePtr)
 	if err != nil {
-		log.Errorf("Refresh map failed: during update %v", err)
+		log.Errorf("refresh map failed: during update %v", err)
 		return err
 	}
 
 	// 3. Read all map entries
 	retrievedMapKeyList, err := m.GetAllMapKeys()
 	if err != nil {
-		log.Errorf("Get all map keys failed: during Refresh %v", err)
+		log.Errorf("get all map keys failed: during Refresh %v", err)
 		return err
 	}
 
@@ -532,7 +532,7 @@ func (objattr *BpfObjGetInfo) BpfGetMapInfoForFD() error {
 		unsafe.Sizeof(*objattr),
 	)
 	if errno != 0 {
-		log.Errorf("Failed to get object info by FD - ret %d and err %s", int(ret), errno)
+		log.Errorf("failed to get object info by FD - ret %d and err %s", int(ret), errno)
 		return errno
 	}
 	return nil
@@ -556,7 +556,7 @@ func GetBPFmapInfo(mapFD int) (BpfMapInfo, error) {
 
 	err := objInfo.BpfGetMapInfoForFD()
 	if err != nil {
-		log.Errorf("Failed to get map Info for FD - ", mapFD)
+		log.Errorf("failed to get map Info for FD - ", mapFD)
 		return BpfMapInfo{}, err
 	}
 
@@ -572,13 +572,13 @@ func BpfGetAllMapInfo() ([]BpfMapInfo, error) {
 
 		mapfd, err := utils.GetMapFDFromID(int(attr.NextID))
 		if err != nil {
-			log.Errorf("Failed to get map Info")
+			log.Errorf("failed to get map Info")
 			return nil, err
 		}
 		log.Infof("Found map FD - %d", mapfd)
 		bpfMapInfo, err := GetBPFmapInfo(mapfd)
 		if err != nil {
-			log.Errorf("Failed to get map Info for FD", mapfd)
+			log.Errorf("failed to get map Info for FD", mapfd)
 			return nil, err
 		}
 		unix.Close(mapfd)
@@ -597,7 +597,7 @@ func (attr *BpfObjGet) BpfGetObject() (int, error) {
 		unsafe.Sizeof(*attr),
 	)
 	if errno != 0 {
-		log.Errorf("Failed to get Map FD - ret %d and err %s", int(ret), errno)
+		log.Errorf("failed to get Map FD - ret %d and err %s", int(ret), errno)
 		return 0, errno
 	}
 	return int(ret), nil
@@ -605,7 +605,7 @@ func (attr *BpfObjGet) BpfGetObject() (int, error) {
 
 func (m *BpfMap) GetMapFromPinPath(pinPath string) (BpfMapInfo, error) {
 	if len(pinPath) == 0 {
-		return BpfMapInfo{}, fmt.Errorf("Invalid pinPath")
+		return BpfMapInfo{}, fmt.Errorf("invalid pinPath")
 	}
 
 	cPath := []byte(pinPath + "\x00")
@@ -615,14 +615,14 @@ func (m *BpfMap) GetMapFromPinPath(pinPath string) (BpfMapInfo, error) {
 
 	mapFD, err := objInfo.BpfGetObject()
 	if err != nil {
-		log.Errorf("Failed to get object")
+		log.Errorf("failed to get object")
 		return BpfMapInfo{}, err
 
 	}
 
 	bpfMapInfo, err := GetBPFmapInfo(mapFD)
 	if err != nil {
-		log.Errorf("Failed to get map Info for FD - %d", mapFD)
+		log.Errorf("failed to get map Info for FD - %d", mapFD)
 		return bpfMapInfo, err
 	}
 	err = unix.Close(int(mapFD))
@@ -641,8 +641,8 @@ func GetNextMapEntryByID(key, nextKey uintptr, mapID int) error {
 
 	mapFD, err := utils.GetMapFDFromID(mapID)
 	if err != nil {
-		log.Errorf("Unable to GetMapFDfromID and ret %d and err %s", int(mapFD), err)
-		return fmt.Errorf("Unable to get FD: %s", err)
+		log.Errorf("unable to GetMapFDfromID and ret %d and err %s", int(mapFD), err)
+		return fmt.Errorf("unable to get FD: %s", err)
 	}
 	attr := utils.BpfMapAttr{
 		MapFD: uint32(mapFD),
@@ -660,9 +660,9 @@ func GetNextMapEntryByID(key, nextKey uintptr, mapID int) error {
 		return errno
 	}
 	if errno != 0 {
-		log.Errorf("Unable to get next map entry and ret %d and err %s", int(ret), errno)
+		log.Errorf("unable to get next map entry and ret %d and err %s", int(ret), errno)
 		unix.Close(mapFD)
-		return fmt.Errorf("Unable to get next map entry: %s", errno)
+		return fmt.Errorf("unable to get next map entry: %s", errno)
 	}
 
 	log.Infof("Got next map entry with fd : %d and err %s", int(ret), errno)
@@ -674,8 +674,8 @@ func GetMapEntryByID(key, value uintptr, mapID int) error {
 
 	mapFD, err := utils.GetMapFDFromID(mapID)
 	if err != nil {
-		log.Errorf("Unable to GetMapFDfromID and ret %d and err %s", int(mapFD), err)
-		return fmt.Errorf("Unable to get FD: %s", err)
+		log.Errorf("unable to GetMapFDfromID and ret %d and err %s", int(mapFD), err)
+		return fmt.Errorf("unable to get FD: %s", err)
 	}
 
 	attr := utils.BpfMapAttr{
@@ -691,9 +691,9 @@ func GetMapEntryByID(key, value uintptr, mapID int) error {
 	)
 
 	if errno != 0 {
-		log.Errorf("Unable to get map entry and ret %d and err %s", int(ret), errno)
+		log.Errorf("unable to get map entry and ret %d and err %s", int(ret), errno)
 		unix.Close(mapFD)
-		return fmt.Errorf("Unable to get next map entry: %s", errno)
+		return fmt.Errorf("unable to get next map entry: %s", errno)
 	}
 
 	log.Infof("Got map entry with ret : %d and err %s", int(ret), errno)

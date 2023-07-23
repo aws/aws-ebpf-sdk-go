@@ -33,14 +33,25 @@ import (
 type BpfProgAPIs interface {
 	PinProg(progFD uint32, pinPath string) error
 	UnPinProg(pinPath string) error
-	LoadProg(progType string, data []byte, licenseStr string, pinPath string, insDefSize int) (int, error)
+	LoadProg(progMetaData CreateEBPFProgInput) (int, error)
 	BpfGetProgFromPinPath(pinPath string) (BpfProgInfo, int, error)
 	GetBPFProgAssociatedMapsIDs(progFD int) ([]uint32, error)
 }
 
 var log = logger.Get()
 
-type BPFProgram struct {
+type CreateEBPFProgInput struct {
+	ProgType       string
+	SubSystem      string
+	SubProgType    string
+	ProgData       []byte
+	LicenseStr     string
+	PinPath        string
+	InsDefSize     int
+	AssociatedMaps map[int]string
+}
+
+type BpfProgram struct {
 	// return program name, prog FD and pinPath
 	ProgID      int
 	ProgFD      int
@@ -121,7 +132,7 @@ type BpfObjGet struct {
 	file_flags uint32
 }
 
-func mount_bpf_fs() error {
+func MountBpfFS() error {
 	log.Infof("Let's mount BPF FS")
 	err := syscall.Mount("bpf", constdef.BPF_DIR_MNT, "bpf", 0, "mode=0700")
 	if err != nil {
@@ -130,14 +141,14 @@ func mount_bpf_fs() error {
 	return err
 }
 
-func (m *BPFProgram) PinProg(progFD uint32, pinPath string) error {
+func (m *BpfProgram) PinProg(progFD uint32, pinPath string) error {
 
 	var err error
 	if utils.IsfileExists(pinPath) {
 		log.Infof("Found file %s so deleting the path", pinPath)
 		err = utils.UnPinObject(pinPath)
 		if err != nil {
-			log.Infof("Failed to UnPinObject during pinning")
+			log.Errorf("failed to UnPinObject during pinning")
 			return err
 		}
 	}
@@ -160,23 +171,23 @@ func (m *BPFProgram) PinProg(progFD uint32, pinPath string) error {
 	return utils.PinObject(progFD, pinPath)
 }
 
-func (m *BPFProgram) UnPinProg(pinPath string) error {
+func (m *BpfProgram) UnPinProg(pinPath string) error {
 	err := utils.UnPinObject(pinPath)
 	if err != nil {
-		log.Infof("Failed to unpin prog")
+		log.Errorf("failed to unpin prog")
 		return err
 	}
 	if m.ProgFD <= 0 {
-		log.Infof("FD is invalid or closed %d", m.ProgFD)
+		log.Errorf("map FD is invalid or closed %d", m.ProgFD)
 		return nil
 	}
 	return unix.Close(int(m.ProgFD))
 }
 
-func (m *BPFProgram) LoadProg(progType string, data []byte, licenseStr string, pinPath string, insDefSize int) (int, error) {
+func (m *BpfProgram) LoadProg(progMetaData CreateEBPFProgInput) (int, error) {
 
 	var prog_type uint32
-	switch progType {
+	switch progMetaData.ProgType {
 	case "xdp":
 		prog_type = uint32(netlink.BPF_PROG_TYPE_XDP)
 	case "tc_cls":
@@ -201,29 +212,29 @@ func (m *BPFProgram) LoadProg(progType string, data []byte, licenseStr string, p
 		LogLevel: 1,
 	}
 
-	program.Insns = uintptr(unsafe.Pointer(&data[0]))
-	program.InsnCnt = uint32(len(data) / insDefSize)
+	program.Insns = uintptr(unsafe.Pointer(&progMetaData.ProgData[0]))
+	program.InsnCnt = uint32(len(progMetaData.ProgData) / progMetaData.InsDefSize)
 
-	license := []byte(licenseStr)
+	license := []byte(progMetaData.LicenseStr)
 	program.License = uintptr(unsafe.Pointer(&license[0]))
 
 	fd, _, errno := unix.Syscall(unix.SYS_BPF,
 		uintptr(constdef.BPF_PROG_LOAD),
 		uintptr(unsafe.Pointer(&program)),
 		unsafe.Sizeof(program))
-	runtime.KeepAlive(data)
+	runtime.KeepAlive(progMetaData.ProgData)
 	runtime.KeepAlive(license)
 
 	log.Infof("Load prog done with fd : %d", int(fd))
 	if errno != 0 {
-		log.Infof(string(logBuf))
+		log.Errorf(string(logBuf))
 		return -1, errno
 	}
 
 	//Pin the prog
-	err := m.PinProg(uint32(fd), pinPath)
+	err := m.PinProg(uint32(fd), progMetaData.PinPath)
 	if err != nil {
-		log.Infof("pin prog failed %v", err)
+		log.Errorf("pin prog failed %v", err)
 		return -1, err
 	}
 	return int(fd), nil
@@ -237,7 +248,7 @@ func (attr *BpfProgAttr) isBpfProgGetNextID() bool {
 		unsafe.Sizeof(*attr),
 	)
 	if errno != 0 {
-		log.Infof("Done get_next_id for Prog - ret %d and err %s", int(ret), errno)
+		log.Errorf("done get_next_id for Prog - ret %d and err %s", int(ret), errno)
 		return false
 	}
 
@@ -253,7 +264,7 @@ func (attr *BpfProgAttr) BpfProgGetFDbyID() (int, error) {
 		unsafe.Sizeof(*attr),
 	)
 	if errno != 0 {
-		log.Infof("Failed to get Prog FD - ret %d and err %s", int(ret), errno)
+		log.Errorf("failed to get Prog FD - ret %d and err %s", int(ret), errno)
 		return 0, errno
 	}
 	return int(ret), nil
@@ -267,7 +278,7 @@ func (objattr *BpfObjGetInfo) BpfGetProgramInfoForFD() error {
 		unsafe.Sizeof(*objattr),
 	)
 	if errno != 0 {
-		log.Infof("Failed to get object info by FD - ret %d and err %s", int(ret), errno)
+		log.Errorf("failed to get object info by FD - ret %d and err %s", int(ret), errno)
 		return errno
 	}
 	return nil
@@ -283,7 +294,7 @@ func GetBPFprogInfo(progFD int) (BpfProgInfo, error) {
 
 	err := objInfo.BpfGetProgramInfoForFD()
 	if err != nil {
-		log.Infof("Failed to get program Info for FD - ", progFD)
+		log.Errorf("failed to get program Info for FD - ", progFD)
 		return BpfProgInfo{}, err
 	}
 
@@ -294,7 +305,7 @@ func GetBPFprogInfo(progFD int) (BpfProgInfo, error) {
 	return bpfProgInfo, nil
 }
 
-func (m *BPFProgram) GetBPFProgAssociatedMapsIDs(progFD int) ([]uint32, error) {
+func (m *BpfProgram) GetBPFProgAssociatedMapsIDs(progFD int) ([]uint32, error) {
 	bpfProgInfo, err := GetBPFprogInfo(progFD)
 
 	if bpfProgInfo.NrMapIDs <= 0 {
@@ -315,7 +326,7 @@ func (m *BPFProgram) GetBPFProgAssociatedMapsIDs(progFD int) ([]uint32, error) {
 
 	err = objInfo.BpfGetProgramInfoForFD()
 	if err != nil {
-		log.Infof("Failed to get program Info for FD - ", progFD)
+		log.Errorf("failed to get program Info for FD - ", progFD)
 		return nil, err
 	}
 	return associatedMaps, nil
@@ -336,7 +347,7 @@ func BpfGetMapInfoFromProgInfo(progFD int, numMaps uint32) (BpfProgInfo, []ebpf_
 
 	err := objInfo.BpfGetProgramInfoForFD()
 	if err != nil {
-		log.Infof("Failed to get program Info for FD - ", progFD)
+		log.Errorf("failed to get program Info for FD - ", progFD)
 		return BpfProgInfo{}, nil, nil, nil, err
 	}
 
@@ -352,14 +363,14 @@ func BpfGetMapInfoFromProgInfo(progFD int, numMaps uint32) (BpfProgInfo, []ebpf_
 
 		mapfd, err := utils.GetMapFDFromID(int(associatedMaps[mapIdx]))
 		if err != nil {
-			log.Infof("Failed to get map Info")
+			log.Errorf("failed to get map Info")
 			return BpfProgInfo{}, nil, nil, nil, err
 		}
 		log.Infof("Found map FD - %d", mapfd)
 
 		bpfMapInfo, err := ebpf_maps.GetBPFmapInfo(mapfd)
 		if err != nil {
-			log.Infof("Failed to get map Info for FD", mapfd)
+			log.Errorf("failed to get map Info for FD", mapfd)
 			return BpfProgInfo{}, nil, nil, nil, err
 		}
 		loadedMaps = append(loadedMaps, bpfMapInfo)
@@ -378,13 +389,13 @@ func BpfGetAllProgramInfo() ([]BpfProgInfo, error) {
 
 		progfd, err := utils.GetProgFDFromID(int(attr.next_id))
 		if err != nil {
-			log.Infof("Failed to get program Info")
+			log.Errorf("failed to get program Info")
 			return nil, err
 		}
 		log.Infof("Found prog FD - %d", progfd)
 		bpfProgInfo, err := GetBPFprogInfo(progfd)
 		if err != nil {
-			log.Infof("Failed to get program Info for FD", progfd)
+			log.Errorf("failed to get program Info for FD", progfd)
 			return nil, err
 		}
 		unix.Close(progfd)
@@ -403,16 +414,16 @@ func (attr *BpfObjGet) BpfGetObject() (int, error) {
 		unsafe.Sizeof(*attr),
 	)
 	if errno != 0 {
-		log.Infof("Failed to get Prog FD - ret %d and err %s", int(ret), errno)
+		log.Errorf("failed to get Prog FD - ret %d and err %s", int(ret), errno)
 		return 0, errno
 	}
 	return int(ret), nil
 }
 
-func (m *BPFProgram) BpfGetProgFromPinPath(pinPath string) (BpfProgInfo, int, error) {
+func (m *BpfProgram) BpfGetProgFromPinPath(pinPath string) (BpfProgInfo, int, error) {
 	log.Infof("Printing pinpath - %s ", pinPath)
 	if len(pinPath) == 0 {
-		return BpfProgInfo{}, -1, fmt.Errorf("Invalid pinPath")
+		return BpfProgInfo{}, -1, fmt.Errorf("invalid pinPath")
 	}
 
 	cPath := []byte(pinPath + "\x00")
@@ -422,7 +433,7 @@ func (m *BPFProgram) BpfGetProgFromPinPath(pinPath string) (BpfProgInfo, int, er
 
 	progFD, err := objInfo.BpfGetObject()
 	if err != nil {
-		log.Infof("Failed to get object")
+		log.Errorf("failed to get object")
 		return BpfProgInfo{}, -1, err
 
 	}
@@ -430,7 +441,7 @@ func (m *BPFProgram) BpfGetProgFromPinPath(pinPath string) (BpfProgInfo, int, er
 	log.Infof("Got progFD - %d", progFD)
 	bpfProgInfo, err := GetBPFprogInfo(progFD)
 	if err != nil {
-		log.Infof("Failed to get program Info for FD - %d", progFD)
+		log.Errorf("failed to get program Info for FD - %d", progFD)
 		return bpfProgInfo, -1, err
 	}
 

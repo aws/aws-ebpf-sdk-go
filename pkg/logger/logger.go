@@ -182,7 +182,7 @@ func (logConfig *Configuration) newZapLogger() *structuredLogger {
 
 	logLevel := getZapLevel(logConfig.LogLevel)
 
-	writer := getSDKLogFilePath(logConfig.LogLocation)
+	writer := getLogFilePath(logConfig.LogLocation)
 
 	cores = append(cores, zapcore.NewCore(getEncoder(), writer, logLevel))
 
@@ -200,8 +200,8 @@ func (logConfig *Configuration) newZapLogger() *structuredLogger {
 	}
 }
 
-// getSDKLogFilePath returns the writer
-func getSDKLogFilePath(logFilePath string) zapcore.WriteSyncer {
+// getLogFilePath returns the writer
+func getLogFilePath(logFilePath string) zapcore.WriteSyncer {
 	var writer zapcore.WriteSyncer
 
 	if logFilePath == "" {

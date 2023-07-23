@@ -21,11 +21,11 @@ const (
 	BPF_MAP_TYPE_DEVMAP
 )
 
-type EBPFType uint32
+type EBPFCmdType uint32
 
 const (
 	// BPF syscall command constants. Must match enum bpf_cmd from linux/bpf.h
-	BPF_MAP_CREATE EBPFType = iota
+	BPF_MAP_CREATE EBPFCmdType = iota
 	BPF_MAP_LOOKUP_ELEM
 	BPF_MAP_UPDATE_ELEM
 	BPF_MAP_DELETE_ELEM

@@ -42,14 +42,35 @@ var (
 
 var log = logger.Get()
 
-type BPFdata struct {
-	Program ebpf_progs.BPFProgram       // Return the program
+type BpfData struct {
+	Program ebpf_progs.BpfProgram       // Return the program
 	Maps    map[string]ebpf_maps.BpfMap // List of associated maps
 }
 
 type relocationEntry struct {
 	relOffset int
 	symbol    elf.Symbol
+}
+
+type progEntry struct {
+	progSection *elf.Section
+	progType    string
+	subSystem   string
+	subProgType string
+}
+
+type elfLoader struct {
+	elfFile           *elf.File
+	customizedPinPath string
+	bpfMapApi         ebpf_maps.BpfMapAPIs
+	bpfProgApi        ebpf_progs.BpfProgAPIs
+
+	license         string
+	mapSection      *elf.Section
+	mapSectionIndex int
+
+	reloSectionMap map[uint32]*elf.Section
+	progSectionMap map[uint32]progEntry
 }
 
 // This is not needed 5.11 kernel onwards because per-cgroup mem limits
@@ -63,102 +84,78 @@ func IncreaseRlimit() error {
 	return nil
 }
 
-func LoadBpfFile(path, customizedPinPath string) (map[string]BPFdata, map[string]ebpf_maps.BpfMap, error) {
-	f, err := os.Open(path)
+func newElfLoader(elfFile *elf.File, bpfmapapi ebpf_maps.BpfMapAPIs, bpfprogapi ebpf_progs.BpfProgAPIs, customizedpinPath string) *elfLoader {
+	elfloader := &elfLoader{
+		elfFile:           elfFile,
+		bpfMapApi:         bpfmapapi,
+		bpfProgApi:        bpfprogapi,
+		customizedPinPath: customizedpinPath,
+		reloSectionMap:    make(map[uint32]*elf.Section),
+		progSectionMap:    make(map[uint32]progEntry),
+	}
+	return elfloader
+}
+
+func LoadBpfFile(path, customizedPinPath string) (map[string]BpfData, map[string]ebpf_maps.BpfMap, error) {
+	bpfFile, err := os.Open(path)
 	if err != nil {
 		log.Infof("LoadBpfFile failed to open")
 		return nil, nil, err
 	}
-	defer f.Close()
+	defer bpfFile.Close()
 
-	bpfMap := &ebpf_maps.BpfMap{}
-	bpfProg := &ebpf_progs.BPFProgram{}
-
-	BPFloadedprog, BPFloadedmaps, err := doLoadELF(f, bpfMap, bpfProg, customizedPinPath)
+	elfFile, err := elf.NewFile(bpfFile)
 	if err != nil {
 		return nil, nil, err
 	}
-	return BPFloadedprog, BPFloadedmaps, nil
+
+	elfLoader := newElfLoader(elfFile, &ebpf_maps.BpfMap{}, &ebpf_progs.BpfProgram{}, customizedPinPath)
+
+	bpfLoadedProg, bpfLoadedMaps, err := elfLoader.doLoadELF()
+	if err != nil {
+		return nil, nil, err
+	}
+	return bpfLoadedProg, bpfLoadedMaps, nil
 }
 
-func loadElfMapsSection(mapsShndx int, dataMaps *elf.Section, elfFile *elf.File, bpfMapApi ebpf_maps.BpfMapAPIs, customizedPinPath string) (map[string]ebpf_maps.BpfMap, error) {
-	mapDefinitionSize := bpfMapDefSize
-	GlobalMapData := []ebpf_maps.CreateEBPFMapInput{}
-	foundMaps := make(map[string]ebpf_maps.BpfMap)
+func (e *elfLoader) loadMap(parsedMapData []ebpf_maps.CreateEBPFMapInput) (map[string]ebpf_maps.BpfMap, error) {
 
-	data, err := dataMaps.Data()
-	if err != nil {
-		log.Infof("Error while loading section")
-		return nil, fmt.Errorf("error while loading section': %w", err)
-	}
+	programmedMaps := make(map[string]ebpf_maps.BpfMap)
+	log.Infof("Total maps found - %d", len(parsedMapData))
 
-	symbols, err := elfFile.Symbols()
-	if err != nil {
-		log.Infof("Get symbol failed")
-		return nil, fmt.Errorf("get symbols: %w", err)
-	}
-
-	for offset := 0; offset < len(data); offset += mapDefinitionSize {
-		mapData := ebpf_maps.CreateEBPFMapInput{
-			Type:       uint32(binary.LittleEndian.Uint32(data[offset : offset+4])),
-			KeySize:    uint32(binary.LittleEndian.Uint32(data[offset+4 : offset+8])),
-			ValueSize:  uint32(binary.LittleEndian.Uint32(data[offset+8 : offset+12])),
-			MaxEntries: uint32(binary.LittleEndian.Uint32(data[offset+12 : offset+16])),
-			Flags:      uint32(binary.LittleEndian.Uint32(data[offset+16 : offset+20])),
-		}
-		pinOptions := ebpf_maps.BpfMapPinOptions{
-			Type: uint32(binary.LittleEndian.Uint32(data[offset+20 : offset+24])),
-		}
-
-		mapData.PinOptions = &pinOptions
-
-		for _, sym := range symbols {
-			if int(sym.Section) == mapsShndx && int(sym.Value) == offset {
-				mapName := path.Base(sym.Name)
-				mapData.Name = mapName
-			}
-		}
-		log.Infof("Found map name %s", mapData.Name)
-		//mapData.Def = mapDef
-		GlobalMapData = append(GlobalMapData, mapData)
-	}
-
-	log.Infof("Total maps found - %d", len(GlobalMapData))
-
-	for index := 0; index < len(GlobalMapData); index++ {
+	for index := 0; index < len(parsedMapData); index++ {
 		log.Infof("Loading maps")
-		loadedMaps := GlobalMapData[index]
+		loadedMaps := parsedMapData[index]
 
 		//Get Pinning info
 		mapNameStr := loadedMaps.Name
-		if len(customizedPinPath) != 0 {
-			mapNameStr = customizedPinPath + "_" + mapNameStr
+		if len(e.customizedPinPath) != 0 {
+			mapNameStr = e.customizedPinPath + "_" + mapNameStr
 		}
 
 		pinPath := constdef.MAP_BPF_FS + mapNameStr
 		loadedMaps.PinOptions.PinPath = pinPath
 
-		bpfMap, err := (bpfMapApi).CreateBPFMap(loadedMaps)
+		bpfMap, err := (e.bpfMapApi).CreateBPFMap(loadedMaps)
 		if err != nil {
-			//Even if one map fails, we error out
 			log.Infof("Failed to create map, continue to next map..just for debugging")
 			continue
 		}
 
 		//Fill ID
-		mapInfo, err := (bpfMapApi).GetMapFromPinPath(pinPath)
+		mapInfo, err := (e.bpfMapApi).GetMapFromPinPath(pinPath)
 		if err != nil {
 			return nil, fmt.Errorf("map '%s' doesn't exist", mapNameStr)
 		}
-		map_id := uint32(mapInfo.Id)
-		bpfMap.MapID = map_id
+		mapID := uint32(mapInfo.Id)
+		bpfMap.MapID = mapID
 
-		foundMaps[loadedMaps.Name] = bpfMap
+		programmedMaps[loadedMaps.Name] = bpfMap
 	}
-	return foundMaps, nil
+	return programmedMaps, nil
 }
 
-func parseRelocationSection(reloSection *elf.Section, elfFile *elf.File) ([]relocationEntry, error) {
+func (e *elfLoader) parseRelocationSection(reloSection *elf.Section, elfFile *elf.File) ([]relocationEntry, error) {
 	var result []relocationEntry
 
 	symbols, err := elfFile.Symbols()
@@ -188,7 +185,7 @@ func parseRelocationSection(reloSection *elf.Section, elfFile *elf.File) ([]relo
 			index = int(elf.R_SYM32(relocEntry.Info)) - 1
 			offset = int(relocEntry.Off)
 		default:
-			return nil, fmt.Errorf("Unsupported arch %v", elfFile.Class)
+			return nil, fmt.Errorf("unsupported arch %v", elfFile.Class)
 		}
 
 		if err != nil {
@@ -201,7 +198,7 @@ func parseRelocationSection(reloSection *elf.Section, elfFile *elf.File) ([]relo
 
 		// Validate the derived index value
 		if index >= len(symbols) {
-			return nil, fmt.Errorf("Invalid Relocation section entry'%v': index %v does not exist",
+			return nil, fmt.Errorf("invalid Relocation section entry'%v': index %v does not exist",
 				reloSection, index)
 		}
 		log.Infof("Relocation section entry: %s @ %v", symbols[index].Name, offset)
@@ -212,305 +209,397 @@ func parseRelocationSection(reloSection *elf.Section, elfFile *elf.File) ([]relo
 	}
 }
 
-func loadElfProgSection(dataProg *elf.Section, reloSection *elf.Section, license string, progType string, subSystem string, subProgType string, sectionIndex int, elfFile *elf.File, bpfProgApi ebpf_progs.BpfProgAPIs, bpfMap ebpf_maps.BpfMapAPIs, customizedPinPath string, loadedMaps map[string]ebpf_maps.BpfMap) (BPFdata, error) {
+func (e *elfLoader) loadProg(loadedProgData map[string]ebpf_progs.CreateEBPFProgInput, loadedMaps map[string]ebpf_maps.BpfMap) (map[string]BpfData, error) {
 
-	isRelocationNeeded := true
-	insDefSize := bpfInsDefSize
+	loadedprog := make(map[string]BpfData)
 
-	data, err := dataProg.Data()
-	if err != nil {
-		return BPFdata{}, err
-	}
-
-	if reloSection == nil {
-		log.Infof("Relocation is not needed")
-		isRelocationNeeded = false
-	}
-
-	//Single section might have multiple programs. So we retrieve one prog at a time and load.
-	symbolTable, err := elfFile.Symbols()
-	if err != nil {
-		log.Infof("Get symbol failed")
-		return BPFdata{}, fmt.Errorf("get symbols: %w", err)
-	}
-
-	mapIDToFD := make(map[int]string)
-
-	if isRelocationNeeded {
-		log.Infof("Loading Program with relocation section; Info:%v; Name: %s, Type: %s; Size: %v", reloSection.Info,
-			reloSection.Name, reloSection.Type, reloSection.Size)
-
-		relocationEntries, err := parseRelocationSection(reloSection, elfFile)
-		if err != nil || len(relocationEntries) == 0 {
-			return BPFdata{}, fmt.Errorf("Unable to parse relocation entries....")
+	for _, pgmInput := range loadedProgData {
+		bpfData := BpfData{}
+		progFD, _ := e.bpfProgApi.LoadProg(pgmInput)
+		if progFD == -1 {
+			log.Infof("Failed to load prog")
+			return nil, fmt.Errorf("failed to Load the prog")
 		}
+		log.Infof("loaded prog with %d", progFD)
 
-		log.Infof("Applying Relocations..")
-		for _, relocationEntry := range relocationEntries {
-			if relocationEntry.relOffset >= len(data) {
-				return BPFdata{}, fmt.Errorf("Invalid offset for the relocation entry %d", relocationEntry.relOffset)
-			}
-
-			//eBPF has one 16-byte instruction: BPF_LD | BPF_DW | BPF_IMM which consists
-			//of two consecutive 'struct bpf_insn' 8-byte blocks and interpreted as single
-			//instruction that loads 64-bit immediate value into a dst_reg.
-			ebpfInstruction := &utils.BPFInsn{
-				Code:   data[relocationEntry.relOffset],
-				DstReg: data[relocationEntry.relOffset+1] & 0xf,
-				SrcReg: data[relocationEntry.relOffset+1] >> 4,
-				Off:    int16(binary.LittleEndian.Uint16(data[relocationEntry.relOffset+2:])),
-				Imm:    int32(binary.LittleEndian.Uint32(data[relocationEntry.relOffset+4:])),
-			}
-
-			log.Infof("BPF Instruction code: %s; offset: %d; imm: %d", ebpfInstruction.Code, ebpfInstruction.Off, ebpfInstruction.Imm)
-
-			//Validate for Invalid BPF instructions
-			if ebpfInstruction.Code != (unix.BPF_LD | unix.BPF_IMM | unix.BPF_DW) {
-				return BPFdata{}, fmt.Errorf("Invalid BPF instruction (at %d): %d",
-					relocationEntry.relOffset, ebpfInstruction.Code)
-			}
-
-			// Point BPF instruction to the FD of the map referenced. Update the last 4 bytes of
-			// instruction (immediate constant) with the map's FD.
-			// BPF_MEM | <size> | BPF_STX:  *(size *) (dst_reg + off) = src_reg
-			// BPF_MEM | <size> | BPF_ST:   *(size *) (dst_reg + off) = imm32
-			mapName := relocationEntry.symbol.Name
-			log.Infof("Map to be relocated; Name: %s", mapName)
-			var mapFD int
-			var map_id int
-			if progMap, ok := loadedMaps[mapName]; ok {
-				map_id = int(progMap.MapID)
-				mapIDToFD[map_id] = mapName
-				mapFD = int(progMap.MapFD)
-
-			} else {
-				//This might be a shared global map so get from pinpath
-				pinLocation := "global_" + mapName
-				globalPinPath := constdef.MAP_BPF_FS + pinLocation
-				mapInfo, err := (bpfMap).GetMapFromPinPath(globalPinPath)
-				if err != nil {
-					return BPFdata{}, fmt.Errorf("map '%s' doesn't exist", mapName)
-				}
-				map_id = int(mapInfo.Id)
-				mapIDToFD[map_id] = mapName
-				mapFD, err = utils.GetMapFDFromID(map_id)
-				if err != nil {
-					return BPFdata{}, fmt.Errorf("Failed to get map FD '%s' doesn't exist", mapName)
-				}
-			}
-
-			log.Infof("Map found. Replace the offset with corresponding Map FD: %v", mapFD)
-			ebpfInstruction.SrcReg = 1 //dummy value for now
-			ebpfInstruction.Imm = int32(mapFD)
-			copy(data[relocationEntry.relOffset:relocationEntry.relOffset+8], ebpfInstruction.ConvertBPFInstructionToByteStream())
-			log.Infof("From data: BPF Instruction code: %d; offset: %d; imm: %d",
-				uint8(data[relocationEntry.relOffset]),
-				uint16(binary.LittleEndian.Uint16(data[relocationEntry.relOffset+2:relocationEntry.relOffset+4])),
-				uint32(binary.LittleEndian.Uint32(data[relocationEntry.relOffset+4:relocationEntry.relOffset+8])))
+		//Fill ID
+		progInfo, newProgFD, err := e.bpfProgApi.BpfGetProgFromPinPath(pgmInput.PinPath)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get ProgID")
 		}
-	}
+		unix.Close(int(newProgFD))
 
-	var pgmList = make(map[string]ebpf_progs.BPFProgram)
-	bpfData := BPFdata{}
-	// Iterate over the symbols in the symbol table
-	for _, symbol := range symbolTable {
-		// Check if the symbol is a function
-		if elf.ST_TYPE(symbol.Info) == elf.STT_FUNC {
-			// Check if sectionIndex matches
-			if int(symbol.Section) == sectionIndex && elf.ST_BIND(symbol.Info) == elf.STB_GLOBAL {
-				// Check if the symbol's value (offset) is within the range of the section data
+		progID := int(progInfo.ID)
 
-				progSize := symbol.Size
-				secOff := symbol.Value
-				ProgName := symbol.Name
-
-				if secOff+progSize > dataProg.Size {
-					log.Infof("Section out of bound secOff %d - progSize %d for name %s and data size %d", progSize, secOff, ProgName, dataProg.Size)
-					return BPFdata{}, fmt.Errorf("Failed to Load the prog")
-				}
-
-				log.Infof("Sec '%s': found program '%s' at insn offset %d (%d bytes), code size %d insns (%d bytes)\n", progType, ProgName, secOff/uint64(insDefSize), secOff, progSize/uint64(insDefSize), progSize)
-				if symbol.Value >= dataProg.Addr && symbol.Value < dataProg.Addr+dataProg.Size {
-
-					dataStart := (symbol.Value - dataProg.Addr)
-					dataEnd := dataStart + progSize
-					programData := make([]byte, progSize)
-					copy(programData, data[dataStart:dataEnd])
-
-					pinLocation := ProgName
-					if len(customizedPinPath) != 0 {
-						pinLocation = customizedPinPath + "_" + ProgName
-					}
-					pinPath := constdef.PROG_BPF_FS + pinLocation
-					progFD, _ := bpfProgApi.LoadProg(progType, programData, license, pinPath, bpfInsDefSize)
-					if progFD == -1 {
-						log.Infof("Failed to load prog")
-						return BPFdata{}, fmt.Errorf("Failed to Load the prog")
-					}
-					log.Infof("loaded prog with %d", progFD)
-
-					//Fill ID
-					progInfo, newProgFD, err := bpfProgApi.BpfGetProgFromPinPath(pinPath)
-					if err != nil {
-						return BPFdata{}, fmt.Errorf("Failed to get ProgID")
-					}
-					unix.Close(int(newProgFD))
-
-					progID := int(progInfo.ID)
-					pgmList[ProgName] = ebpf_progs.BPFProgram{
-						ProgID:      progID,
-						ProgFD:      progFD,
-						PinPath:     pinPath,
-						ProgType:    progType,
-						SubSystem:   subSystem,
-						SubProgType: subProgType,
-					}
-
-					progMaps := make(map[string]ebpf_maps.BpfMap)
-
-					if isRelocationNeeded {
-						associatedMaps, err := bpfProgApi.GetBPFProgAssociatedMapsIDs(progFD)
-						if err != nil {
-							log.Infof("Failed to load prog")
-							return BPFdata{}, fmt.Errorf("Failed to Load the prog, get associatedmapIDs failed")
-						}
-						//walk thru all mapIDs and get loaded FDs and fill BPFData
-						for mapInfoIdx := 0; mapInfoIdx < len(associatedMaps); mapInfoIdx++ {
-							mapID := associatedMaps[mapInfoIdx]
-							if mapName, ok := mapIDToFD[int(mapID)]; ok {
-								progMaps[mapName] = loadedMaps[mapName]
-							}
-						}
-					}
-
-					bpfData.Program = ebpf_progs.BPFProgram{
-						ProgID:      progID,
-						ProgFD:      progFD,
-						PinPath:     pinPath,
-						ProgType:    progType,
-						SubSystem:   subSystem,
-						SubProgType: subProgType,
-					}
-					bpfData.Maps = progMaps
-
-				} else {
-					log.Infof("Invalid ELF file\n")
-					return BPFdata{}, fmt.Errorf("Failed to Load the prog")
-				}
-			}
+		bpfData.Program = ebpf_progs.BpfProgram{
+			ProgID:      progID,
+			ProgFD:      progFD,
+			PinPath:     pgmInput.PinPath,
+			ProgType:    pgmInput.ProgType,
+			SubSystem:   pgmInput.SubSystem,
+			SubProgType: pgmInput.SubProgType,
 		}
+		loadedprog[pgmInput.PinPath] = bpfData
 	}
-
-	return bpfData, nil
+	return loadedprog, nil
 }
 
-func doLoadELF(r io.ReaderAt, bpfMap ebpf_maps.BpfMapAPIs, bpfProg ebpf_progs.BpfProgAPIs, customizedPinPath string) (map[string]BPFdata, map[string]ebpf_maps.BpfMap, error) {
-	var err error
-	elfFile, err := elf.NewFile(r)
+func isProgTypeSupported(progType string) bool {
+	if progType != "xdp" && progType != "tc_cls" && progType != "tc_act" && progType != "kprobe" && progType != "tracepoint" && progType != "kretprobe" {
+		return false
+	}
+	return true
+}
+
+func (e *elfLoader) parseSection() error {
+	for index, section := range e.elfFile.Sections {
+		if section.Name == "license" {
+			data, err := section.Data()
+			if err != nil {
+				return fmt.Errorf("failed to read data for section %s", section.Name)
+			}
+			e.license = string(data)
+		} else if section.Name == "maps" {
+			e.mapSection = section
+			e.mapSectionIndex = index
+		} else if section.Type == elf.SHT_PROGBITS {
+			log.Infof("Found PROG Section at Index %v", index)
+			splitProgType := strings.Split(section.Name, "/")
+			progEntryType := strings.ToLower(splitProgType[0])
+			var subProgEntryType string
+			retrievedProgParams := len(splitProgType)
+			// Kprobe <kprobe/<prog name>>
+			if retrievedProgParams == 2 {
+				subProgEntryType = strings.ToLower(splitProgType[1])
+				log.Infof("Found subprog type %s", subProgEntryType)
+			}
+			//Tracepoint <tracepoint/sched/<prog_name>>
+			var progEntrySubSystem string
+			if retrievedProgParams == 3 {
+				progEntrySubSystem = strings.ToLower(splitProgType[1])
+				subProgEntryType = strings.ToLower(splitProgType[2])
+				log.Infof("Found subprog type %s", progEntrySubSystem)
+			}
+			log.Infof("Found the progType %s", progEntryType)
+			if !isProgTypeSupported(progEntryType) {
+				log.Infof("Not supported program %s", progEntryType)
+				continue
+			}
+
+			pEntry := progEntry{
+				progType:    progEntryType,
+				subSystem:   progEntrySubSystem,
+				subProgType: subProgEntryType,
+				progSection: section,
+			}
+			e.progSectionMap[uint32(index)] = pEntry
+
+		} else if section.Type == elf.SHT_REL {
+			log.Infof("Found a relocation section; Info:%v; Name: %s, Type: %s; Size: %v", section.Info,
+				section.Name, section.Type, section.Size)
+			e.reloSectionMap[section.Info] = section
+		}
+	}
+	return nil
+}
+
+func (e *elfLoader) getLicense() string {
+	return e.license
+}
+
+func (e *elfLoader) parseMap() ([]ebpf_maps.CreateEBPFMapInput, error) {
+	mapDefinitionSize := bpfMapDefSize
+	parsedMapData := []ebpf_maps.CreateEBPFMapInput{}
+
+	data, err := e.mapSection.Data()
+	if err != nil {
+		log.Infof("Error while loading section")
+		return nil, fmt.Errorf("error while loading section': %w", err)
+	}
+
+	symbols, err := e.elfFile.Symbols()
+	if err != nil {
+		log.Infof("Get symbol failed")
+		return nil, fmt.Errorf("get symbols: %w", err)
+	}
+
+	for offset := 0; offset < len(data); offset += mapDefinitionSize {
+		mapData := ebpf_maps.CreateEBPFMapInput{
+			Type:       uint32(binary.LittleEndian.Uint32(data[offset : offset+4])),
+			KeySize:    uint32(binary.LittleEndian.Uint32(data[offset+4 : offset+8])),
+			ValueSize:  uint32(binary.LittleEndian.Uint32(data[offset+8 : offset+12])),
+			MaxEntries: uint32(binary.LittleEndian.Uint32(data[offset+12 : offset+16])),
+			Flags:      uint32(binary.LittleEndian.Uint32(data[offset+16 : offset+20])),
+		}
+		pinOptions := ebpf_maps.BpfMapPinOptions{
+			Type: uint32(binary.LittleEndian.Uint32(data[offset+20 : offset+24])),
+		}
+
+		mapData.PinOptions = &pinOptions
+
+		for _, sym := range symbols {
+			if int(sym.Section) == e.mapSectionIndex && int(sym.Value) == offset {
+				mapName := path.Base(sym.Name)
+				mapData.Name = mapName
+			}
+		}
+		log.Infof("Found map name %s", mapData.Name)
+		parsedMapData = append(parsedMapData, mapData)
+	}
+	return parsedMapData, nil
+}
+
+func (e *elfLoader) parseAndApplyRelocSection(progIndex uint32, loadedMaps map[string]ebpf_maps.BpfMap) ([]byte, map[int]string, error) {
+	progEntry := e.progSectionMap[progIndex]
+	reloSection := e.reloSectionMap[progIndex]
+
+	data, err := progEntry.progSection.Data()
 	if err != nil {
 		return nil, nil, err
 	}
+	log.Infof("Loading Program with relocation section; Info:%v; Name: %s, Type: %s; Size: %v", reloSection.Info,
+		reloSection.Name, reloSection.Type, reloSection.Size)
 
-	BPFloadedprog := make(map[string]BPFdata)
-	reloSectionMap := make(map[uint32]*elf.Section)
+	relocationEntries, err := e.parseRelocationSection(reloSection, e.elfFile)
+	if err != nil || len(relocationEntries) == 0 {
+		return nil, nil, fmt.Errorf("unable to parse relocation entries....")
+	}
 
-	var dataMaps *elf.Section
-	var mapsShndx int
-	license := ""
-	for index, section := range elfFile.Sections {
-		if section.Name == "license" {
-			data, _ := section.Data()
+	log.Infof("Applying Relocations..")
+	associatedMaps := make(map[int]string)
+	for _, relocationEntry := range relocationEntries {
+		if relocationEntry.relOffset >= len(data) {
+			return nil, nil, fmt.Errorf("invalid offset for the relocation entry %d", relocationEntry.relOffset)
+		}
+
+		//eBPF has one 16-byte instruction: BPF_LD | BPF_DW | BPF_IMM which consists
+		//of two consecutive 'struct bpf_insn' 8-byte blocks and interpreted as single
+		//instruction that loads 64-bit immediate value into a dst_reg.
+		ebpfInstruction := &utils.BPFInsn{
+			Code:   data[relocationEntry.relOffset],
+			DstReg: data[relocationEntry.relOffset+1] & 0xf,
+			SrcReg: data[relocationEntry.relOffset+1] >> 4,
+			Off:    int16(binary.LittleEndian.Uint16(data[relocationEntry.relOffset+2:])),
+			Imm:    int32(binary.LittleEndian.Uint32(data[relocationEntry.relOffset+4:])),
+		}
+
+		log.Infof("BPF Instruction code: %s; offset: %d; imm: %d", ebpfInstruction.Code, ebpfInstruction.Off, ebpfInstruction.Imm)
+
+		//Validate for Invalid BPF instructions
+		if ebpfInstruction.Code != (unix.BPF_LD | unix.BPF_IMM | unix.BPF_DW) {
+			return nil, nil, fmt.Errorf("invalid BPF instruction (at %d): %d",
+				relocationEntry.relOffset, ebpfInstruction.Code)
+		}
+
+		// Point BPF instruction to the FD of the map referenced. Update the last 4 bytes of
+		// instruction (immediate constant) with the map's FD.
+		// BPF_MEM | <size> | BPF_STX:  *(size *) (dst_reg + off) = src_reg
+		// BPF_MEM | <size> | BPF_ST:   *(size *) (dst_reg + off) = imm32
+		mapName := relocationEntry.symbol.Name
+		log.Infof("Map to be relocated; Name: %s", mapName)
+		var mapFD int
+		var map_id int
+
+		// Relocated maps can be defined in the same BPF file or defined elsewhere but
+		// using it here. So during relocation we search if it is a local map or
+		// it is a global map.
+
+		if progMap, ok := loadedMaps[mapName]; ok {
+			map_id = int(progMap.MapID)
+			associatedMaps[map_id] = mapName
+			mapFD = int(progMap.MapFD)
+
+		} else {
+			//This might be a shared global map so get from pinpath
+			pinLocation := "global_" + mapName
+			globalPinPath := constdef.MAP_BPF_FS + pinLocation
+			mapInfo, err := (e.bpfMapApi).GetMapFromPinPath(globalPinPath)
 			if err != nil {
-				return nil, nil, fmt.Errorf("Failed to read data for section %s", section.Name)
+				return nil, nil, fmt.Errorf("map '%s' doesn't exist", mapName)
 			}
-			license = string(data)
-			break
-		} else if section.Name == "maps" {
-			dataMaps = section
-			mapsShndx = index
+			map_id = int(mapInfo.Id)
+			associatedMaps[map_id] = mapName
+			mapFD, err = utils.GetMapFDFromID(map_id)
+			if err != nil {
+				return nil, nil, fmt.Errorf("failed to get map FD '%s' doesn't exist", mapName)
+			}
 		}
-	}
 
-	var loadedMaps map[string]ebpf_maps.BpfMap
-	if dataMaps != nil {
-		loadedMaps, err = loadElfMapsSection(mapsShndx, dataMaps, elfFile, bpfMap, customizedPinPath)
+		log.Infof("Map found. Replace the offset with corresponding Map FD: %v", mapFD)
+		ebpfInstruction.SrcReg = 1 //dummy value for now
+		ebpfInstruction.Imm = int32(mapFD)
+		copy(data[relocationEntry.relOffset:relocationEntry.relOffset+8], ebpfInstruction.ConvertBPFInstructionToByteStream())
+		log.Infof("From data: BPF Instruction code: %d; offset: %d; imm: %d",
+			uint8(data[relocationEntry.relOffset]),
+			uint16(binary.LittleEndian.Uint16(data[relocationEntry.relOffset+2:relocationEntry.relOffset+4])),
+			uint32(binary.LittleEndian.Uint32(data[relocationEntry.relOffset+4:relocationEntry.relOffset+8])))
+	}
+	return data, associatedMaps, nil
+
+}
+
+func (e *elfLoader) parseProg(loadedMaps map[string]ebpf_maps.BpfMap) (map[string]ebpf_progs.CreateEBPFProgInput, error) {
+	//Get prog data
+	var pgmList = make(map[string]ebpf_progs.CreateEBPFProgInput)
+
+	for progIndex, progEntry := range e.progSectionMap {
+		dataProg := progEntry.progSection
+		data, err := progEntry.progSection.Data()
 		if err != nil {
-			log.Infof("Failed to load map section")
-			return nil, nil, err
+			return nil, fmt.Errorf("failed to get progEntry Data")
+		}
+
+		var linkedMaps map[int]string
+		//Apply relocation
+		if e.reloSectionMap[progIndex] == nil {
+			log.Infof("Relocation is not needed")
+		} else {
+			progData, associatedMaps, err := e.parseAndApplyRelocSection(progIndex, loadedMaps)
+			if err != nil {
+				return nil, fmt.Errorf("failed to apply relocation: %v", err)
+			}
+			//Replace data with relocated data
+			data = progData
+			linkedMaps = associatedMaps
+		}
+
+		symbolTable, err := e.elfFile.Symbols()
+		if err != nil {
+			log.Infof("Get symbol failed")
+			return nil, fmt.Errorf("get symbols: %w", err)
+		}
+		// Iterate over the symbols in the symbol table
+		for _, symbol := range symbolTable {
+			// Check if the symbol is a function
+			if elf.ST_TYPE(symbol.Info) == elf.STT_FUNC {
+				// Check if sectionIndex matches
+				if uint32(symbol.Section) == uint32(progIndex) && elf.ST_BIND(symbol.Info) == elf.STB_GLOBAL {
+					// Check if the symbol's value (offset) is within the range of the section data
+
+					progSize := symbol.Size
+					secOff := symbol.Value
+					ProgName := symbol.Name
+
+					if secOff+progSize > dataProg.Size {
+						log.Infof("Section out of bound secOff %d - progSize %d for name %s and data size %d", progSize, secOff, ProgName, dataProg.Size)
+						return nil, fmt.Errorf("failed to Load the prog")
+					}
+
+					log.Infof("Sec '%s': found program '%s' at insn offset %d (%d bytes), code size %d insns (%d bytes)\n",
+						progEntry.progType, ProgName, secOff/uint64(bpfInsDefSize), secOff, progSize/uint64(bpfInsDefSize), progSize)
+					if symbol.Value >= dataProg.Addr && symbol.Value < dataProg.Addr+dataProg.Size {
+
+						dataStart := (symbol.Value - dataProg.Addr)
+						dataEnd := dataStart + progSize
+						programData := make([]byte, progSize)
+						copy(programData, data[dataStart:dataEnd])
+
+						pinLocation := ProgName
+						if len(e.customizedPinPath) != 0 {
+							pinLocation = e.customizedPinPath + "_" + ProgName
+						}
+						pinPath := constdef.PROG_BPF_FS + pinLocation
+
+						progMetaData := ebpf_progs.CreateEBPFProgInput{
+							ProgType:       progEntry.progType,
+							SubSystem:      progEntry.subSystem,
+							SubProgType:    progEntry.subProgType,
+							ProgData:       programData,
+							LicenseStr:     e.license,
+							PinPath:        pinPath,
+							InsDefSize:     bpfInsDefSize,
+							AssociatedMaps: linkedMaps,
+						}
+						pgmList[pinPath] = progMetaData
+					} else {
+						log.Infof("Invalid ELF file\n")
+						return nil, fmt.Errorf("failed to Load the prog")
+					}
+				}
+			}
 		}
 	}
+	return pgmList, nil
 
-	//Gather relocation section info
-	for _, reloSection := range elfFile.Sections {
-		if reloSection.Type == elf.SHT_REL {
-			log.Infof("Found a relocation section; Info:%v; Name: %s, Type: %s; Size: %v", reloSection.Info,
-				reloSection.Name, reloSection.Type, reloSection.Size)
-			reloSectionMap[reloSection.Info] = reloSection
-		}
+}
+
+func (e *elfLoader) doLoadELF() (map[string]BpfData, map[string]ebpf_maps.BpfMap, error) {
+	var err error
+
+	//Parse all sections
+	if err := e.parseSection(); err != nil {
+		return nil, nil, fmt.Errorf("failed to parse sections in elf file")
+	}
+
+	//Parse Map
+	parsedMapData, err := e.parseMap()
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to parse maps")
+	}
+
+	//Load Map
+	loadedMapData, err := e.loadMap(parsedMapData)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to load maps")
+	}
+
+	//Parse Prog, need to pass loadedMapData for applying relocation
+	parsedProgData, err := e.parseProg(loadedMapData)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to parse prog")
 	}
 
 	//Load prog
-	for sectionIndex, section := range elfFile.Sections {
-		if section.Type != elf.SHT_PROGBITS {
-			continue
-		}
-
-		log.Infof("Found PROG Section at Index %v", sectionIndex)
-		splitProgType := strings.Split(section.Name, "/")
-		progType := strings.ToLower(splitProgType[0])
-		var subProgType string
-		retrievedProgParams := len(splitProgType)
-
-		// Kprobe <kprobe/<prog name>>
-		if retrievedProgParams == 2 {
-			subProgType = strings.ToLower(splitProgType[1])
-			log.Infof("Found subprog type %s", subProgType)
-		}
-
-		//Tracepoint <tracepoint/sched/<prog_name>>
-		var subSystem string
-		if retrievedProgParams == 3 {
-			subSystem = strings.ToLower(splitProgType[1])
-			subProgType = strings.ToLower(splitProgType[2])
-			log.Infof("Found subprog type %s", subSystem)
-		}
-		log.Infof("Found the progType %s", progType)
-		if progType != "xdp" && progType != "tc_cls" && progType != "tc_act" && progType != "kprobe" && progType != "tracepoint" && progType != "kretprobe" {
-			log.Infof("Not supported program %s", progType)
-			continue
-		}
-		dataProg := section
-		bpfData, err := loadElfProgSection(dataProg, reloSectionMap[uint32(sectionIndex)], license, progType, subSystem, subProgType, sectionIndex, elfFile, bpfProg, bpfMap, customizedPinPath, loadedMaps)
-		if err != nil {
-			log.Infof("Failed to load the prog")
-			return nil, nil, fmt.Errorf("Failed to load prog %q - %v", dataProg.Name, err)
-		}
-		BPFloadedprog[bpfData.Program.PinPath] = bpfData
+	loadedProgData, err := e.loadProg(parsedProgData, loadedMapData)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to load progs")
 	}
 
-	return BPFloadedprog, loadedMaps, nil
+	//Link loaded map with prog
+	for pgmPinPath := range loadedProgData {
+		progMaps := make(map[string]ebpf_maps.BpfMap)
+		if pgmEntry, ok := loadedProgData[pgmPinPath]; ok {
+			associatedmapIDs, err := e.bpfProgApi.GetBPFProgAssociatedMapsIDs(pgmEntry.Program.ProgFD)
+			if err != nil {
+				log.Infof("Failed to load prog")
+				return nil, nil, fmt.Errorf("failed to Load the prog, get associatedmapIDs failed")
+			}
+			//walk thru all mapIDs and get loaded FDs and fill BPFData
+			for mapInfoIdx := 0; mapInfoIdx < len(associatedmapIDs); mapInfoIdx++ {
+				mapID := associatedmapIDs[mapInfoIdx]
+				if mapName, ok := parsedProgData[pgmPinPath].AssociatedMaps[int(mapID)]; ok {
+					progMaps[mapName] = loadedMapData[mapName]
+					log.Infof("Found %s with ID %d and FD %d", mapName, progMaps[mapName].MapID, progMaps[mapName].MapFD)
+				}
+			}
+			pgmEntry.Maps = progMaps
+			loadedProgData[pgmPinPath] = pgmEntry
+		}
+	}
+
+	return loadedProgData, loadedMapData, nil
 }
 
 func GetMapNameFromBPFPinPath(pinPath string) (string, string) {
 
-	replicaNamespaceNameIdentifier := strings.Split(pinPath, "/")
-	podIdentifier := strings.SplitN(replicaNamespaceNameIdentifier[7], "_", 2)
+	splitedPinPath := strings.Split(pinPath, "/")
+	podIdentifier := strings.SplitN(splitedPinPath[len(splitedPinPath)-1], "_", 2)
 	log.Infof("Found Identified - %s : %s", podIdentifier[0], podIdentifier[1])
 
-	replicaNamespace := podIdentifier[0]
+	mapNamespace := podIdentifier[0]
 	mapName := podIdentifier[1]
 
-	log.Infof("Found ->  ", replicaNamespace, mapName)
+	log.Infof("Found ->  ", mapNamespace, mapName)
 
-	directionIdentifier := strings.Split(replicaNamespaceNameIdentifier[7], "_")
+	directionIdentifier := strings.Split(splitedPinPath[len(splitedPinPath)-1], "_")
 	direction := directionIdentifier[1]
 
 	if direction == "ingress" {
-		log.Infof("Adding ingress_map -> ", replicaNamespace)
-		return "ingress_map", replicaNamespace
+		log.Infof("Adding ingress_map -> ", mapNamespace)
+		return "ingress_map", mapNamespace
 	} else if direction == "egress" {
-		log.Infof("Adding egress_map -> ", replicaNamespace)
-		return "egress_map", replicaNamespace
+		log.Infof("Adding egress_map -> ", mapNamespace)
+		return "egress_map", mapNamespace
 	}
 
 	//This is global map, we cannot use global since there are multiple maps
@@ -519,31 +608,11 @@ func GetMapNameFromBPFPinPath(pinPath string) (string, string) {
 }
 
 func IsMapGlobal(pinPath string) bool {
-
-	replicaNamespaceNameIdentifier := strings.Split(pinPath, "/")
-	podIdentifier := strings.SplitN(replicaNamespaceNameIdentifier[7], "_", 2)
-	log.Infof("Found Identified - %s : %s", podIdentifier[0], podIdentifier[1])
-
-	replicaNamespace := podIdentifier[0]
-	mapName := podIdentifier[1]
-
-	log.Infof("Found ->  ", replicaNamespace, mapName)
-
-	directionIdentifier := strings.Split(replicaNamespaceNameIdentifier[7], "_")
-	direction := directionIdentifier[1]
-
-	if direction == "ingress" {
-		log.Infof("Found ingress_map -> ", replicaNamespace)
-		return false
-	} else if direction == "egress" {
-		log.Infof("Found egress_map -> ", replicaNamespace)
+	mapName, _ := GetMapNameFromBPFPinPath(pinPath)
+	if mapName == "ingress_map" || mapName == "egress_map" {
 		return false
 	}
-
-	//This is global map, we cannot use global since there are multiple maps
-	log.Infof("Found GLOBAL %s -> %s", mapName, mapName)
 	return true
-
 }
 
 func RecoverGlobalMaps() (map[string]ebpf_maps.BpfMap, error) {
@@ -566,7 +635,7 @@ func RecoverGlobalMaps() (map[string]ebpf_maps.BpfMap, error) {
 					log.Infof("Found global pinpaths - ", pinPath)
 					bpfMapInfo, err := mapsApi.GetMapFromPinPath(pinPath)
 					if err != nil {
-						log.Infof("Error getting mapInfo for Global pin path, this shouldn't happen")
+						log.Errorf("error getting mapInfo for Global pin path, this shouldn't happen")
 						return err
 					}
 					mapID := bpfMapInfo.Id
@@ -585,7 +654,7 @@ func RecoverGlobalMaps() (map[string]ebpf_maps.BpfMap, error) {
 					mapFD, err := utils.GetMapFDFromID(int(mapID))
 					if err != nil {
 						log.Infof("Unable to GetFDfromID and ret %d and err %s", int(mapFD), err)
-						return fmt.Errorf("Unable to get FD: %s", err)
+						return fmt.Errorf("unable to get FD: %s", err)
 					}
 					recoveredBpfMap.MapFD = uint32(mapFD)
 					log.Infof("Recovered FD %d", mapFD)
@@ -605,7 +674,7 @@ func RecoverGlobalMaps() (map[string]ebpf_maps.BpfMap, error) {
 			return nil
 		}); err != nil {
 			log.Infof("Error walking bpfdirectory:", err)
-			return nil, fmt.Errorf("Error walking the bpfdirectory %v", err)
+			return nil, fmt.Errorf("error walking the bpfdirectory %v", err)
 		}
 	} else {
 		log.Infof("error checking BPF FS, might not be mounted %v", err)
@@ -614,20 +683,20 @@ func RecoverGlobalMaps() (map[string]ebpf_maps.BpfMap, error) {
 	return loadedGlobalMaps, nil
 }
 
-func RecoverAllBpfProgramsAndMaps() (map[string]BPFdata, error) {
+func RecoverAllBpfProgramsAndMaps() (map[string]BpfData, error) {
 	_, err := os.Stat(constdef.BPF_DIR_MNT)
 	if err != nil {
 		log.Infof("BPF FS directory is not present")
-		return nil, fmt.Errorf("BPF directory is not present %v", err)
+		return nil, fmt.Errorf("eBPF FS directory is not present %v", err)
 	}
 
 	var statfs syscall.Statfs_t
 
 	mapsApi := &ebpf_maps.BpfMap{}
-	showProgApi := &ebpf_progs.BPFProgram{}
+	showProgApi := &ebpf_progs.BpfProgram{}
 
 	//Pass DS here
-	loadedPrograms := make(map[string]BPFdata)
+	loadedPrograms := make(map[string]BpfData)
 	mapIDsToNames := make(map[int]string)
 	mapPodSelector := make(map[string]map[int]string)
 	mapIDsToFDs := make(map[int]int)
@@ -645,7 +714,6 @@ func RecoverAllBpfProgramsAndMaps() (map[string]BPFdata, error) {
 	}
 
 	if err := syscall.Statfs(constdef.BPF_DIR_MNT, &statfs); err == nil && statfs.Type == unix.BPF_FS_MAGIC {
-		log.Infof("BPF FS is mounted")
 		if mapsDirExists {
 			if err := filepath.Walk(constdef.MAP_BPF_FS, func(pinPath string, fsinfo os.FileInfo, err error) error {
 				if err != nil {
@@ -655,7 +723,7 @@ func RecoverAllBpfProgramsAndMaps() (map[string]BPFdata, error) {
 					log.Infof("Dumping pinpaths - ", pinPath)
 					bpfMapInfo, err := mapsApi.GetMapFromPinPath(pinPath)
 					if err != nil {
-						log.Infof("Error getting mapInfo for pin path, this shouldn't happen")
+						log.Infof("error getting mapInfo for pin path, this shouldn't happen")
 						return err
 					}
 					mapID := bpfMapInfo.Id
@@ -664,7 +732,7 @@ func RecoverAllBpfProgramsAndMaps() (map[string]BPFdata, error) {
 					mapFD, err := utils.GetMapFDFromID(int(mapID))
 					if err != nil {
 						log.Infof("Unable to GetFDfromID and ret %d and err %s", int(mapFD), err)
-						return fmt.Errorf("Unable to get FD: %s", err)
+						return fmt.Errorf("unable to get FD: %s", err)
 					}
 					log.Infof("Got FD %d", mapFD)
 					mapIDsToFDs[int(mapID)] = mapFD
@@ -679,7 +747,7 @@ func RecoverAllBpfProgramsAndMaps() (map[string]BPFdata, error) {
 				return nil
 			}); err != nil {
 				log.Infof("Error walking bpfdirectory:", err)
-				return nil, fmt.Errorf("Error walking the bpfdirectory %v", err)
+				return nil, fmt.Errorf("failed walking the bpfdirectory %v", err)
 			}
 		}
 
@@ -690,7 +758,7 @@ func RecoverAllBpfProgramsAndMaps() (map[string]BPFdata, error) {
 				}
 				if !fsinfo.IsDir() {
 					log.Infof("Dumping pinpaths - ", pinPath)
-					pgmData := ebpf_progs.BPFProgram{
+					pgmData := ebpf_progs.BpfProgram{
 						PinPath: pinPath,
 					}
 					replicaNamespaceNameIdentifier := strings.Split(pinPath, "/")
@@ -731,14 +799,14 @@ func RecoverAllBpfProgramsAndMaps() (map[string]BPFdata, error) {
 							mapFD, ok := mapIDsToFDs[int(newMapID)]
 							if !ok {
 								log.Infof("Unable to Get FD from ID %d", int(newMapID))
-								return fmt.Errorf("Unable to get FD")
+								return fmt.Errorf("unable to get FD")
 							}
 							recoveredBpfMap.MapFD = uint32(mapFD)
 
 							mapIds, ok := mapPodSelector[replicaNamespace]
 							if !ok {
 								log.Infof("Failed to ID for %s", replicaNamespace)
-								return fmt.Errorf("Failed to get err")
+								return fmt.Errorf("failed to get err")
 							}
 							mapName := mapIds[int(recoveredBpfMap.MapID)]
 
@@ -757,7 +825,7 @@ func RecoverAllBpfProgramsAndMaps() (map[string]BPFdata, error) {
 						}
 
 					}
-					recoveredBPFdata := BPFdata{
+					recoveredBPFdata := BpfData{
 						Program: pgmData,
 						Maps:    recoveredMapData,
 					}
@@ -766,7 +834,7 @@ func RecoverAllBpfProgramsAndMaps() (map[string]BPFdata, error) {
 				return nil
 			}); err != nil {
 				log.Infof("Error walking bpfdirectory:", err)
-				return nil, fmt.Errorf("Error walking the bpfdirectory %v", err)
+				return nil, fmt.Errorf("failed walking the bpfdirectory %v", err)
 			}
 		}
 	} else {
