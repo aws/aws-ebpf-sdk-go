@@ -642,9 +642,9 @@ func RecoverGlobalMaps() (map[string]ebpf_maps.BpfMap, error) {
 					log.Infof("Got ID %d", mapID)
 
 					//Get map name
-					mapName, replicaNamespace := GetMapNameFromBPFPinPath(pinPath)
+					mapName, _ := GetMapNameFromBPFPinPath(pinPath)
 
-					log.Infof("Adding ID %d to name %s and NS %s", mapID, mapName, replicaNamespace)
+					log.Infof("Adding ID %d to name %s", mapID, mapName)
 
 					recoveredBpfMap := ebpf_maps.BpfMap{}
 
@@ -738,11 +738,11 @@ func RecoverAllBpfProgramsAndMaps() (map[string]BpfData, error) {
 					mapIDsToFDs[int(mapID)] = mapFD
 
 					//Get map name
-					mapName, replicaNamespace := GetMapNameFromBPFPinPath(pinPath)
+					mapName, mapNamespace := GetMapNameFromBPFPinPath(pinPath)
 
-					log.Infof("Adding ID %d to name %s and NS %s", mapID, mapName, replicaNamespace)
+					log.Infof("Adding ID %d to name %s and NS %s", mapID, mapName, mapNamespace)
 					mapIDsToNames[int(mapID)] = mapName
-					mapPodSelector[replicaNamespace] = mapIDsToNames
+					mapPodSelector[mapNamespace] = mapIDsToNames
 				}
 				return nil
 			}); err != nil {
@@ -761,12 +761,12 @@ func RecoverAllBpfProgramsAndMaps() (map[string]BpfData, error) {
 					pgmData := ebpf_progs.BpfProgram{
 						PinPath: pinPath,
 					}
-					replicaNamespaceNameIdentifier := strings.Split(pinPath, "/")
-					podIdentifier := strings.SplitN(replicaNamespaceNameIdentifier[7], "_", 2)
+					splitedPinPath := strings.Split(pinPath, "/")
+					podIdentifier := strings.SplitN(splitedPinPath[len(splitedPinPath)-1], "_", 2)
 					log.Infof("Found Identified - %s : %s", podIdentifier[0], podIdentifier[1])
 
-					replicaNamespace := podIdentifier[0]
-					if replicaNamespace == "global" {
+					mapNamespace := podIdentifier[0]
+					if mapNamespace == "global" {
 						log.Infof("Skipping global progs")
 						return nil
 					}
@@ -803,9 +803,9 @@ func RecoverAllBpfProgramsAndMaps() (map[string]BpfData, error) {
 							}
 							recoveredBpfMap.MapFD = uint32(mapFD)
 
-							mapIds, ok := mapPodSelector[replicaNamespace]
+							mapIds, ok := mapPodSelector[mapNamespace]
 							if !ok {
-								log.Infof("Failed to ID for %s", replicaNamespace)
+								log.Infof("Failed to ID for %s", mapNamespace)
 								return fmt.Errorf("failed to get err")
 							}
 							mapName := mapIds[int(recoveredBpfMap.MapID)]
