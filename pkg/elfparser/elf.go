@@ -33,6 +33,7 @@ import (
 	ebpf_maps "github.com/aws/aws-ebpf-sdk-go/pkg/maps"
 	ebpf_progs "github.com/aws/aws-ebpf-sdk-go/pkg/progs"
 	"github.com/aws/aws-ebpf-sdk-go/pkg/utils"
+	"github.com/aws/aws-ebpf-sdk-go/pkg/cache"
 )
 
 var (
@@ -41,6 +42,7 @@ var (
 )
 
 var log = logger.Get()
+var sdkCache = cache.Get()
 
 type BpfData struct {
 	Program ebpf_progs.BpfProgram       // Return the program
@@ -151,6 +153,12 @@ func (e *elfLoader) loadMap(parsedMapData []ebpf_maps.CreateEBPFMapInput) (map[s
 		bpfMap.MapID = mapID
 
 		programmedMaps[loadedMaps.Name] = bpfMap
+
+		if IsMapGlobal(pinPath) {
+			//Add to global cache
+			sdkCache.Set(loadedMaps.Name, int(bpfMap.MapFD))
+			log.Infof("Added map Name %s and FD %d to SDK cache", loadedMaps.Name, bpfMap.MapFD)
+		}
 	}
 	return programmedMaps, nil
 }
@@ -409,22 +417,13 @@ func (e *elfLoader) parseAndApplyRelocSection(progIndex uint32, loadedMaps map[s
 			associatedMaps[map_id] = mapName
 			mapFD = int(progMap.MapFD)
 
+		} else if globalMapFd, ok := sdkCache.Get(mapName); ok {
+			log.Infof("Found FD %d in SDK cache", globalMapFd)
+			mapFD = globalMapFd
 		} else {
-			//This might be a shared global map so get from pinpath
-			pinLocation := "global_" + mapName
-			globalPinPath := constdef.MAP_BPF_FS + pinLocation
-			mapInfo, err := (e.bpfMapApi).GetMapFromPinPath(globalPinPath)
-			if err != nil {
-				return nil, nil, fmt.Errorf("map '%s' doesn't exist", mapName)
-			}
-			map_id = int(mapInfo.Id)
-			associatedMaps[map_id] = mapName
-			mapFD, err = utils.GetMapFDFromID(map_id)
-			if err != nil {
-				return nil, nil, fmt.Errorf("failed to get map FD '%s' doesn't exist", mapName)
-			}
+			return nil, nil, fmt.Errorf("failed to get map FD '%s' doesn't exist", mapName)	
 		}
-
+		
 		log.Infof("Map found. Replace the offset with corresponding Map FD: %v", mapFD)
 		ebpfInstruction.SrcReg = 1 //dummy value for now
 		ebpfInstruction.Imm = int32(mapFD)
@@ -657,7 +656,8 @@ func RecoverGlobalMaps() (map[string]ebpf_maps.BpfMap, error) {
 						return fmt.Errorf("unable to get FD: %s", err)
 					}
 					recoveredBpfMap.MapFD = uint32(mapFD)
-					log.Infof("Recovered FD %d", mapFD)
+					log.Infof("Recovered map Name %s and FD %d", mapName, mapFD)
+					sdkCache.Set(mapName, mapFD)
 					//Fill BPF map metadata
 					recoveredBpfMapMetaData := ebpf_maps.CreateEBPFMapInput{
 						Type:       bpfMapInfo.Type,
@@ -721,6 +721,7 @@ func RecoverAllBpfProgramsAndMaps() (map[string]BpfData, error) {
 				}
 				if !fsinfo.IsDir() {
 					log.Infof("Dumping pinpaths - ", pinPath)
+					
 					bpfMapInfo, err := mapsApi.GetMapFromPinPath(pinPath)
 					if err != nil {
 						log.Infof("error getting mapInfo for pin path, this shouldn't happen")
@@ -728,6 +729,13 @@ func RecoverAllBpfProgramsAndMaps() (map[string]BpfData, error) {
 					}
 					mapID := bpfMapInfo.Id
 					log.Infof("Got ID %d", mapID)
+					//Get map name
+					mapName, mapNamespace := GetMapNameFromBPFPinPath(pinPath)
+					mapIDsToNames[int(mapID)] = mapName
+
+					if IsMapGlobal(pinPath) {
+						return nil
+					}
 					//Fill New FD since old FDs will be deleted on recovery
 					mapFD, err := utils.GetMapFDFromID(int(mapID))
 					if err != nil {
@@ -737,11 +745,7 @@ func RecoverAllBpfProgramsAndMaps() (map[string]BpfData, error) {
 					log.Infof("Got FD %d", mapFD)
 					mapIDsToFDs[int(mapID)] = mapFD
 
-					//Get map name
-					mapName, mapNamespace := GetMapNameFromBPFPinPath(pinPath)
-
 					log.Infof("Adding ID %d to name %s and NS %s", mapID, mapName, mapNamespace)
-					mapIDsToNames[int(mapID)] = mapName
 					mapPodSelector[mapNamespace] = mapIDsToNames
 				}
 				return nil
@@ -758,6 +762,7 @@ func RecoverAllBpfProgramsAndMaps() (map[string]BpfData, error) {
 				}
 				if !fsinfo.IsDir() {
 					log.Infof("Dumping pinpaths - ", pinPath)
+					
 					pgmData := ebpf_progs.BpfProgram{
 						PinPath: pinPath,
 					}
@@ -783,7 +788,7 @@ func RecoverAllBpfProgramsAndMaps() (map[string]BpfData, error) {
 					recoveredMapData := make(map[string]ebpf_maps.BpfMap)
 					if bpfProgInfo.NrMapIDs > 0 {
 						log.Infof("Have associated maps to link")
-						_, associatedBpfMapList, _, associatedBPFMapIDs, err := ebpf_progs.BpfGetMapInfoFromProgInfo(progFD, bpfProgInfo.NrMapIDs)
+						associatedBpfMapList, associatedBPFMapIDs, err := ebpf_progs.BpfGetMapInfoFromProgInfo(progFD, bpfProgInfo.NrMapIDs)
 						if err != nil {
 							log.Infof("Failed to get associated maps")
 							return err
@@ -795,13 +800,6 @@ func RecoverAllBpfProgramsAndMaps() (map[string]BpfData, error) {
 
 							//Fill BPF map
 							recoveredBpfMap.MapID = uint32(newMapID)
-							//Fill New FD since old FDs will be deleted on recovery
-							mapFD, ok := mapIDsToFDs[int(newMapID)]
-							if !ok {
-								log.Infof("Unable to Get FD from ID %d", int(newMapID))
-								return fmt.Errorf("unable to get FD")
-							}
-							recoveredBpfMap.MapFD = uint32(mapFD)
 
 							mapIds, ok := mapPodSelector[mapNamespace]
 							if !ok {
@@ -809,6 +807,23 @@ func RecoverAllBpfProgramsAndMaps() (map[string]BpfData, error) {
 								return fmt.Errorf("failed to get err")
 							}
 							mapName := mapIds[int(recoveredBpfMap.MapID)]
+
+							var mapFD int
+							//Check in global cache for global maps
+							globalMapFd, ok := sdkCache.Get(mapName)
+							if ok {
+								log.Infof("Found FD %d in SDK cache", globalMapFd)
+								mapFD = globalMapFd
+							} else {
+								//Fill New FD since old FDs will be deleted on recovery
+								localMapFD, ok := mapIDsToFDs[int(newMapID)]
+								if !ok {
+									log.Infof("Unable to Get FD from ID %d", int(newMapID))
+									return fmt.Errorf("unable to get FD")
+								}
+								mapFD = localMapFD
+							}
+							recoveredBpfMap.MapFD = uint32(mapFD)
 
 							log.Infof("Mapinfo MapName - %v", bpfMapInfo.Name)
 							//Fill BPF map metadata

@@ -332,7 +332,7 @@ func (m *BpfProgram) GetBPFProgAssociatedMapsIDs(progFD int) ([]uint32, error) {
 	return associatedMaps, nil
 }
 
-func BpfGetMapInfoFromProgInfo(progFD int, numMaps uint32) (BpfProgInfo, []ebpf_maps.BpfMapInfo, []int, []int, error) {
+func BpfGetMapInfoFromProgInfo(progFD int, numMaps uint32) ([]ebpf_maps.BpfMapInfo, []int, error) {
 	associatedMaps := make([]uint32, numMaps)
 	newBpfProgInfo := BpfProgInfo{
 		NrMapIDs: numMaps,
@@ -348,7 +348,7 @@ func BpfGetMapInfoFromProgInfo(progFD int, numMaps uint32) (BpfProgInfo, []ebpf_
 	err := objInfo.BpfGetProgramInfoForFD()
 	if err != nil {
 		log.Errorf("failed to get program Info for FD - ", progFD)
-		return BpfProgInfo{}, nil, nil, nil, err
+		return nil, nil, err
 	}
 
 	log.Infof("TYPE - %d", newBpfProgInfo.Type)
@@ -356,7 +356,6 @@ func BpfGetMapInfoFromProgInfo(progFD int, numMaps uint32) (BpfProgInfo, []ebpf_
 	log.Infof("Maps linked - %d", newBpfProgInfo.NrMapIDs)
 	//Printing associated maps
 	loadedMaps := []ebpf_maps.BpfMapInfo{}
-	loadedMapsFDs := make([]int, 0)
 	loadedMapsIDs := make([]int, 0)
 	for mapIdx := 0; mapIdx < len(associatedMaps); mapIdx++ {
 		log.Infof("MAP ID - %d", associatedMaps[mapIdx])
@@ -364,20 +363,23 @@ func BpfGetMapInfoFromProgInfo(progFD int, numMaps uint32) (BpfProgInfo, []ebpf_
 		mapfd, err := utils.GetMapFDFromID(int(associatedMaps[mapIdx]))
 		if err != nil {
 			log.Errorf("failed to get map Info")
-			return BpfProgInfo{}, nil, nil, nil, err
+			return nil, nil, err
 		}
-		log.Infof("Found map FD - %d", mapfd)
+		log.Infof("Creating temporary map FD - %d", mapfd)
 
 		bpfMapInfo, err := ebpf_maps.GetBPFmapInfo(mapfd)
 		if err != nil {
 			log.Errorf("failed to get map Info for FD", mapfd)
-			return BpfProgInfo{}, nil, nil, nil, err
+			return nil, nil, err
 		}
+
+		log.Infof("Closing map FD %d", mapfd)
+		unix.Close(mapfd)
+
 		loadedMaps = append(loadedMaps, bpfMapInfo)
-		loadedMapsFDs = append(loadedMapsFDs, mapfd)
 		loadedMapsIDs = append(loadedMapsIDs, int(associatedMaps[mapIdx]))
 	}
-	return newBpfProgInfo, loadedMaps, loadedMapsFDs, loadedMapsIDs, nil
+	return loadedMaps, loadedMapsIDs, nil
 }
 
 func BpfGetAllProgramInfo() ([]BpfProgInfo, error) {
