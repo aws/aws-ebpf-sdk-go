@@ -34,7 +34,7 @@ type BpfProgAPIs interface {
 	PinProg(progFD uint32, pinPath string) error
 	UnPinProg(pinPath string) error
 	LoadProg(progMetaData CreateEBPFProgInput) (int, error)
-	BpfGetProgFromPinPath(pinPath string) (BpfProgInfo, int, error)
+	GetProgFromPinPath(pinPath string) (BpfProgInfo, int, error)
 	GetBPFProgAssociatedMapsIDs(progFD int) ([]uint32, error)
 }
 
@@ -422,7 +422,7 @@ func (attr *BpfObjGet) BpfGetObject() (int, error) {
 	return int(ret), nil
 }
 
-func (m *BpfProgram) BpfGetProgFromPinPath(pinPath string) (BpfProgInfo, int, error) {
+func (m *BpfProgram) GetProgFromPinPath(pinPath string) (BpfProgInfo, int, error) {
 	log.Infof("Printing pinpath - %s ", pinPath)
 	if len(pinPath) == 0 {
 		return BpfProgInfo{}, -1, fmt.Errorf("invalid pinPath")

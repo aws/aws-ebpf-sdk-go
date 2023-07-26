@@ -28,17 +28,19 @@ import (
 
 	"golang.org/x/sys/unix"
 
+	"github.com/aws/aws-ebpf-sdk-go/pkg/cache"
 	constdef "github.com/aws/aws-ebpf-sdk-go/pkg/constants"
 	"github.com/aws/aws-ebpf-sdk-go/pkg/logger"
 	ebpf_maps "github.com/aws/aws-ebpf-sdk-go/pkg/maps"
 	ebpf_progs "github.com/aws/aws-ebpf-sdk-go/pkg/progs"
 	"github.com/aws/aws-ebpf-sdk-go/pkg/utils"
-	"github.com/aws/aws-ebpf-sdk-go/pkg/cache"
 )
 
 var (
-	bpfInsDefSize = (binary.Size(utils.BPFInsn{}) - 1)
-	bpfMapDefSize = binary.Size(ebpf_maps.BpfMapDef{})
+	bpfInsDefSize        = (binary.Size(utils.BPFInsn{}) - 1)
+	bpfMapDefSize        = binary.Size(ebpf_maps.BpfMapDef{})
+	probeProgParams      = 2
+	tracepointProgParams = 3
 )
 
 var log = logger.Get()
@@ -140,8 +142,8 @@ func (e *elfLoader) loadMap(parsedMapData []ebpf_maps.CreateEBPFMapInput) (map[s
 
 		bpfMap, err := (e.bpfMapApi).CreateBPFMap(loadedMaps)
 		if err != nil {
-			log.Infof("Failed to create map, continue to next map..just for debugging")
-			continue
+			log.Errorf("failed to create map %v", err)
+			return nil, err
 		}
 
 		//Fill ID
@@ -231,7 +233,7 @@ func (e *elfLoader) loadProg(loadedProgData map[string]ebpf_progs.CreateEBPFProg
 		log.Infof("loaded prog with %d", progFD)
 
 		//Fill ID
-		progInfo, newProgFD, err := e.bpfProgApi.BpfGetProgFromPinPath(pgmInput.PinPath)
+		progInfo, newProgFD, err := e.bpfProgApi.GetProgFromPinPath(pgmInput.PinPath)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get ProgID")
 		}
@@ -259,6 +261,28 @@ func isProgTypeSupported(progType string) bool {
 	return true
 }
 
+func parseProgType(splitProgType []string) (string, string, error) {
+	retrievedProgParams := len(splitProgType)
+
+	if retrievedProgParams != probeProgParams || retrievedProgParams != tracepointProgParams {
+		return "", "", fmt.Errorf("unsupported prog params")
+	}
+
+	var progEntrySubSystem string
+	var subProgEntryType string
+
+	if retrievedProgParams == probeProgParams {
+		subProgEntryType = strings.ToLower(splitProgType[1])
+		log.Infof("Found subprog type %s", subProgEntryType)
+	}
+	if retrievedProgParams == tracepointProgParams {
+		progEntrySubSystem = strings.ToLower(splitProgType[1])
+		subProgEntryType = strings.ToLower(splitProgType[2])
+		log.Infof("Found subprog type %s/%s", subProgEntryType, progEntrySubSystem)
+	}
+	return subProgEntryType, progEntrySubSystem, nil
+}
+
 func (e *elfLoader) parseSection() error {
 	for index, section := range e.elfFile.Sections {
 		if section.Name == "license" {
@@ -274,20 +298,13 @@ func (e *elfLoader) parseSection() error {
 			log.Infof("Found PROG Section at Index %v", index)
 			splitProgType := strings.Split(section.Name, "/")
 			progEntryType := strings.ToLower(splitProgType[0])
-			var subProgEntryType string
-			retrievedProgParams := len(splitProgType)
-			// Kprobe <kprobe/<prog name>>
-			if retrievedProgParams == 2 {
-				subProgEntryType = strings.ToLower(splitProgType[1])
-				log.Infof("Found subprog type %s", subProgEntryType)
+
+			subProgEntryType, progEntrySubSystem, err := parseProgType(splitProgType)
+			if err != nil {
+				log.Errorf("Invalid prog type and subtype, supported is kprobe/progName or tracepoint/progType/progName")
+				return fmt.Errorf("invalid progType or subType")
 			}
-			//Tracepoint <tracepoint/sched/<prog_name>>
-			var progEntrySubSystem string
-			if retrievedProgParams == 3 {
-				progEntrySubSystem = strings.ToLower(splitProgType[1])
-				subProgEntryType = strings.ToLower(splitProgType[2])
-				log.Infof("Found subprog type %s", progEntrySubSystem)
-			}
+
 			log.Infof("Found the progType %s", progEntryType)
 			if !isProgTypeSupported(progEntryType) {
 				log.Infof("Not supported program %s", progEntryType)
@@ -421,9 +438,9 @@ func (e *elfLoader) parseAndApplyRelocSection(progIndex uint32, loadedMaps map[s
 			log.Infof("Found FD %d in SDK cache", globalMapFd)
 			mapFD = globalMapFd
 		} else {
-			return nil, nil, fmt.Errorf("failed to get map FD '%s' doesn't exist", mapName)	
+			return nil, nil, fmt.Errorf("failed to get map FD '%s' doesn't exist", mapName)
 		}
-		
+
 		log.Infof("Map found. Replace the offset with corresponding Map FD: %v", mapFD)
 		ebpfInstruction.SrcReg = 1 //dummy value for now
 		ebpfInstruction.Imm = int32(mapFD)
@@ -721,7 +738,7 @@ func RecoverAllBpfProgramsAndMaps() (map[string]BpfData, error) {
 				}
 				if !fsinfo.IsDir() {
 					log.Infof("Dumping pinpaths - ", pinPath)
-					
+
 					bpfMapInfo, err := mapsApi.GetMapFromPinPath(pinPath)
 					if err != nil {
 						log.Infof("error getting mapInfo for pin path, this shouldn't happen")
@@ -762,7 +779,7 @@ func RecoverAllBpfProgramsAndMaps() (map[string]BpfData, error) {
 				}
 				if !fsinfo.IsDir() {
 					log.Infof("Dumping pinpaths - ", pinPath)
-					
+
 					pgmData := ebpf_progs.BpfProgram{
 						PinPath: pinPath,
 					}
@@ -777,7 +794,7 @@ func RecoverAllBpfProgramsAndMaps() (map[string]BpfData, error) {
 					}
 
 					//mapData := [string]ebpf_maps.BPFMap{}
-					bpfProgInfo, progFD, err := (showProgApi).BpfGetProgFromPinPath(pinPath)
+					bpfProgInfo, progFD, err := (showProgApi).GetProgFromPinPath(pinPath)
 					if err != nil {
 						log.Infof("Failed to progInfo for pinPath %s", pinPath)
 						return err

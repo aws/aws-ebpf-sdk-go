@@ -16,15 +16,16 @@ package cache
 
 import (
 	"sync"
+
 	"github.com/aws/aws-ebpf-sdk-go/pkg/logger"
 )
 
-var sdkCache *GlobalCacheMap 
+var sdkCache *GlobalCacheMap
 var log = logger.Get()
 
 // Adding a struct if in future we need a cleanup routine
 type CacheValue struct {
-	mapFD   int
+	mapFD int
 }
 
 type GlobalCacheMap struct {
@@ -38,7 +39,7 @@ func (c *GlobalCacheMap) Set(key string, value int) {
 func (c *GlobalCacheMap) Get(key string) (int, bool) {
 	entry, found := c.globalMap.Load(key)
 	if !found {
-	 return -1, false
+		return -1, false
 	}
 	cacheEntry := entry.(CacheValue)
 	return cacheEntry.mapFD, true
@@ -62,8 +63,3 @@ func New() *GlobalCacheMap {
 	}
 	return sdkCache
 }
-
-
-
-
-       
