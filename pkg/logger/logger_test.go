@@ -76,19 +76,19 @@ func TestLogLevelReturnsDefaultLevelWhenEnvSetToInvalidValue(t *testing.T) {
 	assert.Equal(t, expectedLogLevel, getZapLevel(inputLogLevel))
 }
 
-func TestGetSDKLogFilePathEmpty(t *testing.T) {
+func TestgetLogFilePathEmpty(t *testing.T) {
 	expectedWriter := zapcore.Lock(os.Stderr)
 	inputSDKLogFile := ""
-	assert.Equal(t, expectedWriter, getSDKLogFilePath(inputSDKLogFile))
+	assert.Equal(t, expectedWriter, getLogFilePath(inputSDKLogFile))
 }
 
-func TestGetSDKLogFilePathStdout(t *testing.T) {
+func TestgetLogFilePathStdout(t *testing.T) {
 	expectedWriter := zapcore.Lock(os.Stdout)
 	inputSDKLogFile := "stdout"
-	assert.Equal(t, expectedWriter, getSDKLogFilePath(inputSDKLogFile))
+	assert.Equal(t, expectedWriter, getLogFilePath(inputSDKLogFile))
 }
 
-func TestGetSDKLogFilePath(t *testing.T) {
+func TestgetLogFilePath(t *testing.T) {
 	inputSDKLogFile := "/var/log/aws-routed-eni/ebpf-sdk.log"
 	expectedLumberJackLogger := &lumberjack.Logger{
 		Filename:   "/var/log/aws-routed-eni/ebpf-sdk.log",
@@ -97,5 +97,5 @@ func TestGetSDKLogFilePath(t *testing.T) {
 		MaxAge:     30,
 		Compress:   true,
 	}
-	assert.Equal(t, zapcore.AddSync(expectedLumberJackLogger), getSDKLogFilePath(inputSDKLogFile))
+	assert.Equal(t, zapcore.AddSync(expectedLumberJackLogger), getLogFilePath(inputSDKLogFile))
 }

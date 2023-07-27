@@ -34,22 +34,6 @@ func (m *MockBpfProgAPIs) EXPECT() *MockBpfProgAPIsMockRecorder {
 	return m.recorder
 }
 
-// BpfGetProgFromPinPath mocks base method.
-func (m *MockBpfProgAPIs) BpfGetProgFromPinPath(arg0 string) (progs.BpfProgInfo, int, error) {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "BpfGetProgFromPinPath", arg0)
-	ret0, _ := ret[0].(progs.BpfProgInfo)
-	ret1, _ := ret[1].(int)
-	ret2, _ := ret[2].(error)
-	return ret0, ret1, ret2
-}
-
-// BpfGetProgFromPinPath indicates an expected call of BpfGetProgFromPinPath.
-func (mr *MockBpfProgAPIsMockRecorder) BpfGetProgFromPinPath(arg0 interface{}) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "BpfGetProgFromPinPath", reflect.TypeOf((*MockBpfProgAPIs)(nil).BpfGetProgFromPinPath), arg0)
-}
-
 // GetBPFProgAssociatedMapsIDs mocks base method.
 func (m *MockBpfProgAPIs) GetBPFProgAssociatedMapsIDs(arg0 int) ([]uint32, error) {
 	m.ctrl.T.Helper()
@@ -65,19 +49,35 @@ func (mr *MockBpfProgAPIsMockRecorder) GetBPFProgAssociatedMapsIDs(arg0 interfac
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetBPFProgAssociatedMapsIDs", reflect.TypeOf((*MockBpfProgAPIs)(nil).GetBPFProgAssociatedMapsIDs), arg0)
 }
 
-// LoadProg mocks base method.
-func (m *MockBpfProgAPIs) LoadProg(arg0 string, arg1 []byte, arg2, arg3 string, arg4 int) (int, error) {
+// GetProgFromPinPath mocks base method.
+func (m *MockBpfProgAPIs) GetProgFromPinPath(arg0 string) (progs.BpfProgInfo, int, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "LoadProg", arg0, arg1, arg2, arg3, arg4)
+	ret := m.ctrl.Call(m, "GetProgFromPinPath", arg0)
+	ret0, _ := ret[0].(progs.BpfProgInfo)
+	ret1, _ := ret[1].(int)
+	ret2, _ := ret[2].(error)
+	return ret0, ret1, ret2
+}
+
+// GetProgFromPinPath indicates an expected call of GetProgFromPinPath.
+func (mr *MockBpfProgAPIsMockRecorder) GetProgFromPinPath(arg0 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetProgFromPinPath", reflect.TypeOf((*MockBpfProgAPIs)(nil).GetProgFromPinPath), arg0)
+}
+
+// LoadProg mocks base method.
+func (m *MockBpfProgAPIs) LoadProg(arg0 progs.CreateEBPFProgInput) (int, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "LoadProg", arg0)
 	ret0, _ := ret[0].(int)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // LoadProg indicates an expected call of LoadProg.
-func (mr *MockBpfProgAPIsMockRecorder) LoadProg(arg0, arg1, arg2, arg3, arg4 interface{}) *gomock.Call {
+func (mr *MockBpfProgAPIsMockRecorder) LoadProg(arg0 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "LoadProg", reflect.TypeOf((*MockBpfProgAPIs)(nil).LoadProg), arg0, arg1, arg2, arg3, arg4)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "LoadProg", reflect.TypeOf((*MockBpfProgAPIs)(nil).LoadProg), arg0)
 }
 
 // PinProg mocks base method.

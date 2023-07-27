@@ -15,6 +15,7 @@
 package elfparser
 
 import (
+	"debug/elf"
 	"os"
 	"testing"
 
@@ -52,13 +53,16 @@ func TestLoadelf(t *testing.T) {
 	mockProgAPIs := mock_ebpf_progs.NewMockBpfProgAPIs(ctrl)
 
 	mockAPIs.EXPECT().CreateBPFMap(gomock.Any()).AnyTimes()
-	mockProgAPIs.EXPECT().LoadProg(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).AnyTimes()
+	mockProgAPIs.EXPECT().LoadProg(gomock.Any()).AnyTimes()
 	mockAPIs.EXPECT().PinMap(gomock.Any(), gomock.Any()).AnyTimes()
 	mockAPIs.EXPECT().GetMapFromPinPath(gomock.Any()).AnyTimes()
-	mockProgAPIs.EXPECT().BpfGetProgFromPinPath(gomock.Any()).AnyTimes()
+	mockProgAPIs.EXPECT().GetProgFromPinPath(gomock.Any()).AnyTimes()
 	mockProgAPIs.EXPECT().GetBPFProgAssociatedMapsIDs(gomock.Any()).AnyTimes()
+	elfFile, err := elf.NewFile(f)
+	assert.NoError(t, err)
 
-	_, _, err := doLoadELF(f, mockAPIs, mockProgAPIs, "test")
+	elfLoader := newElfLoader(elfFile, mockAPIs, mockProgAPIs, "test")
+	_, _, err = elfLoader.doLoadELF()
 	assert.NoError(t, err)
 }
 
@@ -73,13 +77,16 @@ func TestLoadelfWithoutReloc(t *testing.T) {
 	mockProgAPIs := mock_ebpf_progs.NewMockBpfProgAPIs(ctrl)
 
 	mockAPIs.EXPECT().CreateBPFMap(gomock.Any()).AnyTimes()
-	mockProgAPIs.EXPECT().LoadProg(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).AnyTimes()
+	mockProgAPIs.EXPECT().LoadProg(gomock.Any()).AnyTimes()
 	mockAPIs.EXPECT().PinMap(gomock.Any(), gomock.Any()).AnyTimes()
 	mockAPIs.EXPECT().GetMapFromPinPath(gomock.Any()).AnyTimes()
-	mockProgAPIs.EXPECT().BpfGetProgFromPinPath(gomock.Any()).AnyTimes()
+	mockProgAPIs.EXPECT().GetProgFromPinPath(gomock.Any()).AnyTimes()
 	mockProgAPIs.EXPECT().GetBPFProgAssociatedMapsIDs(gomock.Any()).AnyTimes()
 
-	_, _, err := doLoadELF(f, mockAPIs, mockProgAPIs, "test")
+	elfFile, err := elf.NewFile(f)
+	assert.NoError(t, err)
+	elfLoader := newElfLoader(elfFile, mockAPIs, mockProgAPIs, "test")
+	_, _, err = elfLoader.doLoadELF()
 	assert.NoError(t, err)
 }
 
@@ -94,12 +101,15 @@ func TestLoadelfWithoutProg(t *testing.T) {
 	mockProgAPIs := mock_ebpf_progs.NewMockBpfProgAPIs(ctrl)
 
 	mockAPIs.EXPECT().CreateBPFMap(gomock.Any()).AnyTimes()
-	mockProgAPIs.EXPECT().LoadProg(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).AnyTimes()
+	mockProgAPIs.EXPECT().LoadProg(gomock.Any()).AnyTimes()
 	mockAPIs.EXPECT().PinMap(gomock.Any(), gomock.Any()).AnyTimes()
 	mockAPIs.EXPECT().GetMapFromPinPath(gomock.Any()).AnyTimes()
-	mockProgAPIs.EXPECT().BpfGetProgFromPinPath(gomock.Any()).AnyTimes()
+	mockProgAPIs.EXPECT().GetProgFromPinPath(gomock.Any()).AnyTimes()
 	mockProgAPIs.EXPECT().GetBPFProgAssociatedMapsIDs(gomock.Any()).AnyTimes()
 
-	_, _, err := doLoadELF(f, mockAPIs, mockProgAPIs, "test")
+	elfFile, err := elf.NewFile(f)
+	assert.NoError(t, err)
+	elfLoader := newElfLoader(elfFile, mockAPIs, mockProgAPIs, "test")
+	_, _, err = elfLoader.doLoadELF()
 	assert.NoError(t, err)
 }

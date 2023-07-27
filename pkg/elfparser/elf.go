@@ -39,7 +39,8 @@ import (
 var (
 	bpfInsDefSize        = (binary.Size(utils.BPFInsn{}) - 1)
 	bpfMapDefSize        = binary.Size(ebpf_maps.BpfMapDef{})
-	probeProgParams      = 2
+	probeProgParams      = 1
+	kprobeProgParams     = 2
 	tracepointProgParams = 3
 )
 
@@ -264,14 +265,14 @@ func isProgTypeSupported(progType string) bool {
 func parseProgType(splitProgType []string) (string, string, error) {
 	retrievedProgParams := len(splitProgType)
 
-	if retrievedProgParams != probeProgParams || retrievedProgParams != tracepointProgParams {
+	if retrievedProgParams != probeProgParams && retrievedProgParams != kprobeProgParams && retrievedProgParams != tracepointProgParams {
 		return "", "", fmt.Errorf("unsupported prog params")
 	}
 
 	var progEntrySubSystem string
 	var subProgEntryType string
 
-	if retrievedProgParams == probeProgParams {
+	if retrievedProgParams == kprobeProgParams {
 		subProgEntryType = strings.ToLower(splitProgType[1])
 		log.Infof("Found subprog type %s", subProgEntryType)
 	}
@@ -295,13 +296,13 @@ func (e *elfLoader) parseSection() error {
 			e.mapSection = section
 			e.mapSectionIndex = index
 		} else if section.Type == elf.SHT_PROGBITS {
-			log.Infof("Found PROG Section at Index %v", index)
+			log.Infof("Found PROG Section at Index %v and Name %s", index, section.Name)
 			splitProgType := strings.Split(section.Name, "/")
 			progEntryType := strings.ToLower(splitProgType[0])
 
 			subProgEntryType, progEntrySubSystem, err := parseProgType(splitProgType)
 			if err != nil {
-				log.Errorf("Invalid prog type and subtype, supported is kprobe/progName or tracepoint/progType/progName")
+				log.Info("Invalid prog type and subtype, supported is progtype such as tc or kprobe/progName or tracepoint/progType/progName")
 				return fmt.Errorf("invalid progType or subType")
 			}
 
@@ -335,6 +336,11 @@ func (e *elfLoader) getLicense() string {
 func (e *elfLoader) parseMap() ([]ebpf_maps.CreateEBPFMapInput, error) {
 	mapDefinitionSize := bpfMapDefSize
 	parsedMapData := []ebpf_maps.CreateEBPFMapInput{}
+
+	if e.mapSection == nil {
+		log.Infof("Bpf file has no map section so skipping parse")
+		return nil, nil
+	}
 
 	data, err := e.mapSection.Data()
 	if err != nil {
