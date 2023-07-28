@@ -91,4 +91,6 @@ const (
 	 */
 	PROG_BPF_FS = "/sys/fs/bpf/globals/aws/programs/"
 	MAP_BPF_FS  = "/sys/fs/bpf/globals/aws/maps/"
+
+	TRACEPOINT_EVENTS = "/sys/kernel/debug/tracing/events"
 )

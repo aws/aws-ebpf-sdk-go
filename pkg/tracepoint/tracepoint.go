@@ -22,6 +22,7 @@ import (
 
 	"unsafe"
 
+	constdef "github.com/aws/aws-ebpf-sdk-go/pkg/constants"
 	"github.com/aws/aws-ebpf-sdk-go/pkg/logger"
 	"golang.org/x/sys/unix"
 )
@@ -41,7 +42,7 @@ func TracepointAttach(progFD int, subSystem, eventName string) error {
 	}
 
 	//Get the TP ID
-	tracepointIDpath := fmt.Sprintf("/sys/kernel/debug/tracing/events/%s/%s/id", subSystem, eventName)
+	tracepointIDpath := fmt.Sprintf("%s/%s/%s/id", constdef.TRACEPOINT_EVENTS, subSystem, eventName)
 	data, err := os.ReadFile(tracepointIDpath)
 	if err != nil {
 		log.Errorf("unable to read the tracepointID: %v", err)
@@ -64,6 +65,11 @@ func TracepointAttach(progFD int, subSystem, eventName string) error {
 	}
 	attr.Size = uint32(unsafe.Sizeof(attr))
 
+	/*
+	 * Ref : https://man7.org/linux/man-pages/man2/perf_event_open.2.html
+	 * pid = -1 and cpu = 0 [This measures all processes/threads on the specified CPU]
+	 * group_fd = -1 Creates event group with leader first.
+	 */
 	fd, err := unix.PerfEventOpen(&attr, -1, 0, -1, unix.PERF_FLAG_FD_CLOEXEC)
 	if err != nil {
 		log.Errorf("failed to open perf event %v", err)
@@ -82,6 +88,6 @@ func TracepointAttach(progFD int, subSystem, eventName string) error {
 		return err
 	}
 
-	log.Infof("Attach done!!! %d", fd)
+	log.Infof("Tracepoint attach done!!! %d", fd)
 	return nil
 }
