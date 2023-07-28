@@ -62,16 +62,16 @@ func KprobeAttach(progFD int, eventName string, funcName string) error {
 	}
 
 	//Get the Kprobe ID
-	kprobeIDpath := fmt.Sprintf("/sys/kernel/debug/tracing/events/kprobes/%s/id", eventName)
+	kprobeIDpath := fmt.Sprintf("%s/%s/id", constdef.KPROBE_SYS_DEBUG, eventName)
 	data, err := os.ReadFile(kprobeIDpath)
 	if err != nil {
-		log.Errorf("Unable to read the kprobeID: %v", err)
+		log.Errorf("unable to read the kprobeID: %v", err)
 		return err
 	}
 	id := strings.TrimSpace(string(data))
 	eventID, err := strconv.Atoi(id)
 	if err != nil {
-		log.Errorf("Invalid ID during parsing: %s - %w", id, err)
+		log.Errorf("invalid ID during parsing: %s - %w", id, err)
 		return err
 	}
 
@@ -87,7 +87,7 @@ func KprobeAttach(progFD int, eventName string, funcName string) error {
 
 	fd, err := unix.PerfEventOpen(&attr, -1, 0, -1, unix.PERF_FLAG_FD_CLOEXEC)
 	if err != nil {
-		log.Errorf("Failed to open perf event %v", err)
+		log.Errorf("failed to open perf event %v", err)
 		return err
 	}
 
@@ -145,7 +145,7 @@ func KretprobeAttach(progFD int, eventName string, funcName string) error {
 	}
 
 	//Get the Kprobe ID
-	kprobeIDpath := fmt.Sprintf("/sys/kernel/debug/tracing/events/kretprobes/%s/id", eventName)
+	kprobeIDpath := fmt.Sprintf("%s/%s/id", constdef.KRETPROBE_SYS_DEBUG, eventName)
 	data, err := os.ReadFile(kprobeIDpath)
 	if err != nil {
 		log.Errorf("unable to read the kretprobeID: %v", err)
@@ -154,7 +154,7 @@ func KretprobeAttach(progFD int, eventName string, funcName string) error {
 	id := strings.TrimSpace(string(data))
 	eventID, err := strconv.Atoi(id)
 	if err != nil {
-		log.Errorf("Invalid ID during parsing: %s - %w", id, err)
+		log.Errorf("invalid ID during parsing: %s - %w", id, err)
 		return err
 	}
 
@@ -170,7 +170,7 @@ func KretprobeAttach(progFD int, eventName string, funcName string) error {
 
 	fd, err := unix.PerfEventOpen(&attr, -1, 0, -1, unix.PERF_FLAG_FD_CLOEXEC)
 	if err != nil {
-		log.Errorf("Failed to open perf event %v", err)
+		log.Errorf("failed to open perf event %v", err)
 		return err
 	}
 
@@ -191,11 +191,11 @@ func KretprobeAttach(progFD int, eventName string, funcName string) error {
 
 }
 
-func KprobeDetach(eventName string) error {
+func probeDetach(eventName string) error {
 	log.Infof("Calling Detach on %s", eventName)
 	file, err := os.OpenFile(constdef.KPROBE_SYS_EVENTS, os.O_APPEND|os.O_WRONLY, 0)
 	if err != nil {
-		log.Errorf("cannot open kprobe events: %v", err)
+		log.Errorf("cannot open probe events: %v", err)
 		return err
 	}
 	defer file.Close()
@@ -207,9 +207,19 @@ func KprobeDetach(eventName string) error {
 			log.Infof("File is already cleanedup, maybe some other process?")
 			return nil
 		}
-		log.Errorf("cannot update the kprobe events %v", err)
+		log.Errorf("cannot update the probe events %v", err)
 		return err
 	}
-	log.Infof("KPROBE Detach done!!!")
+	log.Infof("probe Detach done!!!")
 	return nil
+}
+
+func KprobeDetach(eventName string) error {
+	log.Infof("Calling Kprobe Detach on %s", eventName)
+	return probeDetach(eventName)
+}
+
+func KretprobeDetach(eventName string) error {
+	log.Infof("Calling Kretprobe Detach on %s", eventName)
+	return probeDetach(eventName)
 }
