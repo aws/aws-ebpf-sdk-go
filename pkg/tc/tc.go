@@ -15,6 +15,7 @@
 package tc
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
@@ -22,6 +23,10 @@ import (
 	"github.com/aws/aws-ebpf-sdk-go/pkg/logger"
 	"github.com/vishvananda/netlink"
 	"golang.org/x/sys/unix"
+)
+
+const (
+	FILTER_CLEANUP_FAILED = "filter cleanup failed"
 )
 
 var log = logger.Get()
@@ -118,7 +123,7 @@ func TCIngressDetach(interfaceName string) error {
 			err = netlink.FilterDel(filter)
 			if err != nil {
 				log.Errorf("delete filter failed on intf %s : %v", interfaceName, err)
-				return err
+				return errors.New("filter cleanup failed")
 			}
 			log.Infof("TC ingress filter detach done")
 			return nil
@@ -196,7 +201,7 @@ func TCEgressDetach(interfaceName string) error {
 			err = netlink.FilterDel(filter)
 			if err != nil {
 				log.Errorf("delete filter failed on intf %s : %v", interfaceName, err)
-				return err
+				return errors.New(FILTER_CLEANUP_FAILED)
 			}
 			log.Infof("TC egress filter detach done")
 			return nil
@@ -225,7 +230,9 @@ func CleanupQdiscs(prefix string, ingressCleanup bool, egressCleanup bool) error
 				log.Infof("Trying to cleanup ingress on %s", linkName)
 				err = TCIngressDetach(linkName)
 				if err != nil {
-					log.Errorf("failed to detach ingress, might not be present so moving on")
+					if err.Error() == FILTER_CLEANUP_FAILED {
+						log.Errorf("failed to detach ingress, might not be present so moving on")
+					}
 				}
 			}
 
@@ -233,7 +240,9 @@ func CleanupQdiscs(prefix string, ingressCleanup bool, egressCleanup bool) error
 				log.Infof("Trying to cleanup egress on %s", linkName)
 				err = TCEgressDetach(linkName)
 				if err != nil {
-					log.Errorf("failed to detach egress, might not be present so moving on")
+					if err.Error() == FILTER_CLEANUP_FAILED {
+						log.Errorf("failed to detach egress, might not be present so moving on")
+					}
 				}
 			}
 		}
