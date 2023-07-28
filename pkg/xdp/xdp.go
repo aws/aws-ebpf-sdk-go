@@ -26,14 +26,14 @@ func XDPAttach(interfaceName string, progFD int) error {
 
 	link, err := netlink.LinkByName(interfaceName)
 	if err != nil {
-		log.Errorf("failed linkbyname: %v", err)
+		log.Errorf("failed to obtain link info for %s : %v", interfaceName, err)
 		return err
 	}
 
-	log.Infof("Attaching xdp to interface %s and prog %d", interfaceName, progFD)
+	log.Infof("Attaching xdp prog %d to interface %s", progFD, interfaceName)
 
 	if err := netlink.LinkSetXdpFdWithFlags(link, progFD, constdef.XDP_ATTACH_MODE_SKB); err != nil {
-		log.Errorf("failed to setxdp: %v", err)
+		log.Errorf("failed to setup xdp: %v", err)
 		return err
 	}
 	log.Infof("Attached XDP to interface %s", interfaceName)
@@ -45,12 +45,12 @@ func XDPDetach(interfaceName string) error {
 
 	link, err := netlink.LinkByName(interfaceName)
 	if err != nil {
-		log.Errorf("failed linkbyname: %v", err)
+		log.Errorf("failed to obtain link info for %s : %v", interfaceName, err)
 		return err
 	}
 
 	if err := netlink.LinkSetXdpFdWithFlags(link, -1, constdef.XDP_ATTACH_MODE_SKB); err != nil {
-		log.Errorf("failed to setxdp: %v", err)
+		log.Errorf("failed to setup xdp: %v", err)
 		return err
 	}
 	return nil
