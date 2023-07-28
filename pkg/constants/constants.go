@@ -91,4 +91,7 @@ const (
 	 */
 	PROG_BPF_FS = "/sys/fs/bpf/globals/aws/programs/"
 	MAP_BPF_FS  = "/sys/fs/bpf/globals/aws/maps/"
+
+	QDISC_HANDLE              = 0xffff
+	DEFAULT_BPF_FILTER_HANDLE = 0x1
 )
