@@ -39,7 +39,7 @@ func enableQdisc(link netlink.Link) bool {
 		if attrs.LinkIndex != link.Attrs().Index {
 			continue
 		}
-		if (attrs.Handle&qdiscHandle) == qdiscHandle && attrs.Parent == netlink.HANDLE_INGRESS {
+		if (attrs.Handle&qdiscHandle) == qdiscHandle && attrs.Parent == netlink.HANDLE_CLSACT {
 			log.Infof("Found qdisc hence don't install again")
 			return false
 		}
@@ -49,7 +49,7 @@ func enableQdisc(link netlink.Link) bool {
 
 }
 
-func TCIngressAttach(interfaceName string, progFD int) error {
+func TCIngressAttach(interfaceName string, progFD int, funcName string) error {
 	intf, err := netlink.LinkByName(interfaceName)
 	if err != nil {
 		log.Errorf("failed to find device by name %s: %w", interfaceName, err)
@@ -59,7 +59,7 @@ func TCIngressAttach(interfaceName string, progFD int) error {
 	attrs := netlink.QdiscAttrs{
 		LinkIndex: intf.Attrs().Index,
 		Handle:    netlink.MakeHandle(constdef.QDISC_HANDLE, 0),
-		Parent:    netlink.HANDLE_INGRESS,
+		Parent:    netlink.HANDLE_CLSACT,
 	}
 
 	if enableQdisc(intf) {
@@ -84,12 +84,12 @@ func TCIngressAttach(interfaceName string, progFD int) error {
 			Priority:  1,
 		},
 		Fd:           progFD,
-		Name:         "handle_ingress",
+		Name:         funcName,
 		DirectAction: true,
 	}
 
 	if err = netlink.FilterAdd(filter); err != nil {
-		log.Errorf("while loading egress program %q on fd %d: %v", "handle ingress", progFD, err)
+		log.Errorf("while loading ingress program %q on fd %d: %v", "handle ingress", progFD, err)
 		return err
 	}
 	log.Infof("TC ingress filter add done %s", interfaceName)
@@ -120,14 +120,14 @@ func TCIngressDetach(interfaceName string) error {
 				log.Errorf("delete filter failed on intf %s : %v", interfaceName, err)
 				return err
 			}
-			log.Infof("TC filter detach done")
+			log.Infof("TC ingress filter detach done")
 			return nil
 		}
 	}
 	return fmt.Errorf("detach failed on ingress interface - %s", interfaceName)
 }
 
-func TCEgressAttach(interfaceName string, progFD int) error {
+func TCEgressAttach(interfaceName string, progFD int, funcName string) error {
 	intf, err := netlink.LinkByName(interfaceName)
 	if err != nil {
 		log.Errorf("failed to find device by name %s: %w", interfaceName, err)
@@ -137,7 +137,7 @@ func TCEgressAttach(interfaceName string, progFD int) error {
 	attrs := netlink.QdiscAttrs{
 		LinkIndex: intf.Attrs().Index,
 		Handle:    netlink.MakeHandle(constdef.QDISC_HANDLE, 0),
-		Parent:    netlink.HANDLE_INGRESS,
+		Parent:    netlink.HANDLE_CLSACT,
 	}
 
 	if enableQdisc(intf) {
@@ -162,7 +162,7 @@ func TCEgressAttach(interfaceName string, progFD int) error {
 			Priority:  1,
 		},
 		Fd:           progFD,
-		Name:         "handle_egress",
+		Name:         funcName,
 		DirectAction: true,
 	}
 
@@ -198,7 +198,7 @@ func TCEgressDetach(interfaceName string) error {
 				log.Errorf("delete filter failed on intf %s : %v", interfaceName, err)
 				return err
 			}
-			log.Infof("TC filter detach done")
+			log.Infof("TC egress filter detach done")
 			return nil
 		}
 	}
@@ -208,7 +208,7 @@ func TCEgressDetach(interfaceName string) error {
 func CleanupQdiscs(prefix string, ingressCleanup bool, egressCleanup bool) error {
 
 	if prefix == "" {
-		log.Errorf("prefix should be given")
+		log.Errorf("invalid empty prefix")
 		return nil
 	}
 
