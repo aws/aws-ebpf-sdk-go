@@ -92,3 +92,12 @@ const (
 	PROG_BPF_FS = "/sys/fs/bpf/globals/aws/programs/"
 	MAP_BPF_FS  = "/sys/fs/bpf/globals/aws/maps/"
 )
+
+type XDPattachType int
+
+const (
+	XDP_ATTACH_MODE_NONE = 1 << iota
+	XDP_ATTACH_MODE_SKB
+	XDP_ATTACH_MODE_DRV
+	XDP_ATTACH_MODE_HW
+)
