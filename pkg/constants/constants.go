@@ -92,5 +92,22 @@ const (
 	PROG_BPF_FS = "/sys/fs/bpf/globals/aws/programs/"
 	MAP_BPF_FS  = "/sys/fs/bpf/globals/aws/maps/"
 
+
 	TRACEPOINT_EVENTS = "/sys/kernel/debug/tracing/events"
+
+	KPROBE_SYS_EVENTS   = "/sys/kernel/debug/tracing/kprobe_events"
+	KPROBE_SYS_DEBUG    = "/sys/kernel/debug/tracing/events/kprobes"
+	KRETPROBE_SYS_DEBUG = "/sys/kernel/debug/tracing/events/kretprobes"
+
+	QDISC_HANDLE              = 0xffff
+	DEFAULT_BPF_FILTER_HANDLE = 0x1
+)
+
+type XDPattachType int
+
+const (
+	XDP_ATTACH_MODE_NONE = 1 << iota
+	XDP_ATTACH_MODE_SKB
+	XDP_ATTACH_MODE_DRV
+	XDP_ATTACH_MODE_HW
 )
