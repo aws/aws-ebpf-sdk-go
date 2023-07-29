@@ -93,6 +93,8 @@ const (
 	MAP_BPF_FS  = "/sys/fs/bpf/globals/aws/maps/"
 
 
+	TRACEPOINT_EVENTS = "/sys/kernel/debug/tracing/events"
+
 	KPROBE_SYS_EVENTS   = "/sys/kernel/debug/tracing/kprobe_events"
 	KPROBE_SYS_DEBUG    = "/sys/kernel/debug/tracing/events/kprobes"
 	KRETPROBE_SYS_DEBUG = "/sys/kernel/debug/tracing/events/kretprobes"
