@@ -8,8 +8,8 @@ ARCH = $(lastword $(subst :, ,$(filter $(UNAME_ARCH):%,x86_64:x86 aarch64:arm64)
 
 BUILD_MODE ?= -buildmode=pie
 build-linux: BUILD_FLAGS = $(BUILD_MODE) -ldflags '-s -w'
-build-linux:    ## Build the VPC CNI plugin agent using the host's Go toolchain.
-	find ./pkg -type f -name '*.go' -exec sh -c 'echo Compiling {} && go build {}' \;
+build-linux:    ## Build all packages in /pkg.
+	find ./pkg -type d -exec sh -c 'echo "Compiling package in: {}" && cd {} && go build' \;
 
 format:       ## Format all Go source code files.
 	@command -v goimports >/dev/null || { echo "ERROR: goimports not installed"; exit 1; }
