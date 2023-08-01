@@ -64,32 +64,40 @@ func (r *RingBuffer) ParseRingData(consumerPosition uint64) *RingData {
 	updateConsumerPosition := (uintptr(consumerPosition) & uintptr(r.Mask))
 	data := (*int32)(unsafe.Pointer(uintptr(r.Data) + updateConsumerPosition))
 
-	//Get the len which is uint32 in header struct
-	dataLen := atomic.LoadInt32(data)
+	// Single record will have [header,payload] and header maintains [len, pgoff]
+	// len field in the header, is the u32 data len but kernel overloads this field with busy and discard bit
+	// BPF_RINGBUF_BUSY_BIT		= (1U << 31)
+	// BPF_RINGBUF_DISCARD_BIT	= (1U << 30) [Ref kernel bpf.h]
+	// If busy bit is set we skip read i.e, not update consumer position and re-read during next poll
+	// if Discard bit is set we just update consumer position but not read the record.
+	// We fetch 32 bits value from the data pointer which is the start of the record.
+	entryLen := atomic.LoadInt32(data)
 
-	// Data len in a record is in ringbufHeader.
-	// But the len has busy and discard bit so skip it
-	strippedDataLen := ((uint32(dataLen) << 2) >> 2)
+	// entryLen now is the "len" in ringbuf Header struct.
+	// But this is overloaded with busy and discard bit so skip it to get actual data/record length
+	strippedDataLen := ((uint32(entryLen) << 2) >> 2)
 
-	// Entire record len = data length + header length
+	// recordLen will include actual data/record length + header length
 	recordLen := (strippedDataLen + uint32(ringbufHeaderSize))
 
-	//round up recordLen to nearest 8-byte alignment
-	roundedDataLen := (recordLen + 7) &^ 7
+	// round up recordLen to nearest 8-byte alignment which will be the offset for next record start position
+	// ref to __bpf_ringbuf_reserve
+	// https://github.com/torvalds/linux/blob/master/kernel/bpf/ringbuf.c#L418
+	roundedEntryLen := (recordLen + 7) &^ 7
 
 	ringdata := &RingData{
 		Data:      data,
-		Len:       uint32(dataLen),
+		Len:       uint32(entryLen),
 		DataLen:   uint32(strippedDataLen),
-		RecordLen: uint32(roundedDataLen),
+		RecordLen: uint32(roundedEntryLen),
 	}
 
-	//Update if busy bit is set
+	// Check if busy bit is set
 	if (ringdata.Len & unix.BPF_RINGBUF_BUSY_BIT) != 0 {
 		ringdata.BusyRecord = true
 	}
 
-	//Update if record has to be discarded
+	// Check if record has to be discarded
 	if (ringdata.Len & unix.BPF_RINGBUF_DISCARD_BIT) != 0 {
 		ringdata.DiscardRecord = true
 	}
