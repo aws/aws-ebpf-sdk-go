@@ -51,7 +51,7 @@ func isValidMapFDList(mapFDlist []int) bool {
 		}
 		mapInfo, err := ebpf_maps.GetBPFmapInfo(mapFD)
 		if err != nil {
-			fmt.Errorf("failed to map info")
+			fmt.Errorf("failed to get map info")
 			return false
 		}
 		if mapInfo.Type != constdef.BPF_MAP_TYPE_RINGBUF.Index() {
@@ -85,7 +85,7 @@ func InitRingBuffer(mapFDlist []int) (map[int]chan []byte, error) {
 
 		mapInfo, err := ebpf_maps.GetBPFmapInfo(mapFD)
 		if err != nil {
-			fmt.Errorf("failed to map info")
+			fmt.Errorf("failed to get map info for mapFD %d", mapFD)
 			return nil, fmt.Errorf("failed to map info")
 		}
 
