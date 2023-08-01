@@ -65,33 +65,44 @@ func (r *RingBuffer) ParseRingData(consumerPosition uint64) *RingData {
 	data := (*int32)(unsafe.Pointer(uintptr(r.Data) + updateConsumerPosition))
 
 	//Get the len which is uint32 in header struct
-	headerLen := atomic.LoadInt32(data)
+	dataLen := atomic.LoadInt32(data)
 
-	// Len in ringbufHeader has busy and discard bit so skip it
-	dataLen := (((uint32(headerLen) << 2) >> 2) + uint32(ringbufHeaderSize))
-	//round up dataLen to nearest 8-byte alignment
-	roundedDataLen := (dataLen + 7) &^ 7
+	// Data len in a record is in ringbufHeader.
+	// But the len has busy and discard bit so skip it
+	strippedDataLen := ((uint32(dataLen) << 2) >> 2)
+
+	// Entire record len = data length + header length
+	recordLen := (strippedDataLen + uint32(ringbufHeaderSize))
+
+	//round up recordLen to nearest 8-byte alignment
+	roundedDataLen := (recordLen + 7) &^ 7
 
 	ringdata := &RingData{
 		Data:      data,
-		HeaderLen: uint32(headerLen),
-		DataLen:   uint32(roundedDataLen),
+		Len:       uint32(dataLen),
+		DataLen:   uint32(strippedDataLen),
+		RecordLen: uint32(roundedDataLen),
+	}
+
+	//Update if busy bit is set
+	if (ringdata.Len & unix.BPF_RINGBUF_BUSY_BIT) != 0 {
+		ringdata.BusyRecord = true
+	}
+
+	//Update if record has to be discarded
+	if (ringdata.Len & unix.BPF_RINGBUF_DISCARD_BIT) != 0 {
+		ringdata.DiscardRecord = true
 	}
 	return ringdata
 }
 
 type RingData struct {
-	Data      *int32
-	HeaderLen uint32
-	DataLen   uint32
-}
-
-func (rd *RingData) isBusy() bool {
-	return (rd.HeaderLen & unix.BPF_RINGBUF_BUSY_BIT) != 0
-}
-
-func (rd *RingData) isDiscard() bool {
-	return (rd.HeaderLen & unix.BPF_RINGBUF_DISCARD_BIT) != 0
+	Data          *int32
+	Len           uint32
+	DataLen       uint32
+	RecordLen     uint32
+	BusyRecord    bool
+	DiscardRecord bool
 }
 
 func (rd *RingData) parseSample() []byte {
