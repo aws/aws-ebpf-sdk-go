@@ -2,6 +2,7 @@ package constants
 
 type EBPFMapType uint32
 
+//Currently synced with 5.10.188 - https://elixir.bootlin.com/linux/v5.10.188/source/include/uapi/linux/bpf.h
 const (
 	// BPF map type constants. Must match enum bpf_map_type from linux/bpf.h
 	BPF_MAP_TYPE_UNSPEC EBPFMapType = iota
@@ -19,7 +20,25 @@ const (
 	BPF_MAP_TYPE_ARRAY_OF_MAPS
 	BPF_MAP_TYPE_HASH_OF_MAPS
 	BPF_MAP_TYPE_DEVMAP
+	BPF_MAP_TYPE_SOCKMAP
+	BPF_MAP_TYPE_CPUMAP
+	BPF_MAP_TYPE_XSKMAP
+	BPF_MAP_TYPE_SOCKHASH
+	BPF_MAP_TYPE_CGROUP_STORAGE
+	BPF_MAP_TYPE_REUSEPORT_SOCKARRAY
+	BPF_MAP_TYPE_PERCPU_CGROUP_STORAGE
+	BPF_MAP_TYPE_QUEUE
+	BPF_MAP_TYPE_STACK
+	BPF_MAP_TYPE_SK_STORAGE
+	BPF_MAP_TYPE_DEVMAP_HASH
+	BPF_MAP_TYPE_STRUCT_OPS
+	BPF_MAP_TYPE_RINGBUF
+	BPF_MAP_TYPE_INODE_STORAGE
 )
+
+func (mapType EBPFMapType) Index() uint32 {
+	return uint32(mapType)
+}
 
 type EBPFCmdType uint32
 
@@ -91,7 +110,6 @@ const (
 	 */
 	PROG_BPF_FS = "/sys/fs/bpf/globals/aws/programs/"
 	MAP_BPF_FS  = "/sys/fs/bpf/globals/aws/maps/"
-
 
 	TRACEPOINT_EVENTS = "/sys/kernel/debug/tracing/events"
 
