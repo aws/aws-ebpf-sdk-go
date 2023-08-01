@@ -206,18 +206,18 @@ func (ev *Events) parseBuffer(consumerPosition uint64, eventRing *RingBuffer) bo
 
 		// Check if busy then skip, Might not be committed yet
 		// There are 2 steps -> reserve and then commit/discard
-		if ringdata.isBusy() {
+		if ringdata.BusyRecord {
 			readDone = true
 			break
 		}
 
 		readDone = false
 
-		// Update the position irrespective of discard or commit of data
-		consumerPosition += uint64(ringdata.DataLen)
+		// Update the position to the next record irrespective of discard or commit of data
+		consumerPosition += uint64(ringdata.RecordLen)
 
 		//Pick the data only if committed
-		if !ringdata.isDiscard() {
+		if !ringdata.DiscardRecord {
 			ev.eventsDataChannel <- ringdata.parseSample()
 		}
 		eventRing.setConsumerPosition(consumerPosition)
