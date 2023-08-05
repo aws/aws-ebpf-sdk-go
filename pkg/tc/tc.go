@@ -114,7 +114,7 @@ func TCIngressDetach(interfaceName string) error {
 
 	filters, err := netlink.FilterList(intf, filterParent)
 	if err != nil {
-		log.Errorf("Failed to get filter list: %v", err)
+		log.Errorf("failed to get filter list: %v", err)
 		return err
 	}
 
@@ -123,13 +123,13 @@ func TCIngressDetach(interfaceName string) error {
 			err = netlink.FilterDel(filter)
 			if err != nil {
 				log.Errorf("delete filter failed on intf %s : %v", interfaceName, err)
-				return errors.New("filter cleanup failed")
+				return errors.New(FILTER_CLEANUP_FAILED)
 			}
 			log.Infof("TC ingress filter detach done")
 			return nil
 		}
 	}
-	return fmt.Errorf("detach failed on ingress interface - %s", interfaceName)
+	return fmt.Errorf("no active filter to detach-%s", interfaceName)
 }
 
 func TCEgressAttach(interfaceName string, progFD int, funcName string) error {
@@ -192,7 +192,7 @@ func TCEgressDetach(interfaceName string) error {
 
 	filters, err := netlink.FilterList(intf, filterParent)
 	if err != nil {
-		log.Errorf("Failed to get filter list: %v", err)
+		log.Errorf("failed to get filter list: %v", err)
 		return err
 	}
 
@@ -207,7 +207,7 @@ func TCEgressDetach(interfaceName string) error {
 			return nil
 		}
 	}
-	return fmt.Errorf("detach failed on egress interface - %s", interfaceName)
+	return fmt.Errorf("no active filter to detach-%s", interfaceName)
 }
 
 func CleanupQdiscs(prefix string, ingressCleanup bool, egressCleanup bool) error {
