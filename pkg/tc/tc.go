@@ -129,7 +129,7 @@ func TCIngressDetach(interfaceName string) error {
 			return nil
 		}
 	}
-	return fmt.Errorf("no active filter to detach - %s", interfaceName)
+	return fmt.Errorf("no active filter to detach-%s", interfaceName)
 }
 
 func TCEgressAttach(interfaceName string, progFD int, funcName string) error {
@@ -207,7 +207,7 @@ func TCEgressDetach(interfaceName string) error {
 			return nil
 		}
 	}
-	return fmt.Errorf("no active filter to detach - %s", interfaceName)
+	return fmt.Errorf("no active filter to detach-%s", interfaceName)
 }
 
 func CleanupQdiscs(prefix string, ingressCleanup bool, egressCleanup bool) error {
