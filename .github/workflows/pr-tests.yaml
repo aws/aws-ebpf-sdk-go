@@ -1,4 +1,4 @@
-ame: Automatic Pull Request test
+name: Automatic Pull Request test
 
 on:
   pull_request:
