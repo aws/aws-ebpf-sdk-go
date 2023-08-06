@@ -454,7 +454,6 @@ func (m *BpfMap) BulkDeleteMapEntry(keyvalue map[uintptr]uintptr) error {
 
 func (m *BpfMap) BulkUpdateMapEntry(keyvalue map[uintptr]uintptr) error {
 	for k, v := range keyvalue {
-		log.Errorf("key being programmed - in bytearray ", *((*uint64)(unsafe.Pointer(k))))
 		err := m.UpdateMapEntry(k, v)
 		if err != nil {
 			log.Infof("One of the element update failed hence returning from bulk update")
