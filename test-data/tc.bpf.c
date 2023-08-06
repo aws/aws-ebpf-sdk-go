@@ -8,3 +8,11 @@ int handle_ingress(struct __sk_buff *skb)
 {
 	return BPF_OK;
 }
+
+SEC("test")
+int handle_test_ingress(struct __sk_buff *skb)
+{
+	return BPF_OK;
+}
+
+char _license[] SEC("license") = "GPL";

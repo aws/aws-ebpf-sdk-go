@@ -292,7 +292,9 @@ func (e *elfLoader) parseSection() error {
 				return fmt.Errorf("failed to read data for section %s", section.Name)
 			}
 			e.license = string(data)
+			log.Infof("Found license - %s", e.license)
 		} else if section.Name == "maps" {
+			log.Infof("Found maps Section at Index %v", index)
 			e.mapSection = section
 			e.mapSectionIndex = index
 		} else if section.Type == elf.SHT_PROGBITS {
@@ -326,6 +328,11 @@ func (e *elfLoader) parseSection() error {
 			e.reloSectionMap[section.Info] = section
 		}
 	}
+
+	if len(e.license) == 0 {
+		return fmt.Errorf("license missing in elf file")
+	}
+
 	return nil
 }
 
@@ -345,9 +352,13 @@ func (e *elfLoader) parseMap() ([]ebpf_maps.CreateEBPFMapInput, error) {
 	data, err := e.mapSection.Data()
 	if err != nil {
 		log.Infof("Error while loading section")
-		return nil, fmt.Errorf("error while loading section': %w", err)
+		return nil, fmt.Errorf("error while loading section : %w", err)
 	}
 
+	if len(data) == 0 {
+		log.Infof("Missing data in mapsection")
+		return nil, fmt.Errorf("missing data in map section")
+	}
 	symbols, err := e.elfFile.Symbols()
 	if err != nil {
 		log.Infof("Get symbol failed")
