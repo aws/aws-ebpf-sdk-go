@@ -21,5 +21,3 @@ struct bpf_map_def_pvt SEC("maps") policy_events = {
     .max_entries = 256 * 1024,
     .pinning = PIN_GLOBAL_NS,
 };
-
-char _license[] SEC("license") = "GPL";

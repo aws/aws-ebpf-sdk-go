@@ -116,6 +116,11 @@ int conn_del(struct pt_regs *ctx) {
         evt.protocol = flow_key.protocol;
 	bpf_ringbuf_output(&policy_events, &evt, sizeof(evt), 2);
 	return 0;
-}	
+}
+
+SEC("tracepoint/sched/sched_process_fork")
+int sched_process_fork(struct sched_process_fork_t *ctx) {
+    return 0;
+}
 
 char _license[] SEC("license") = "GPL";
