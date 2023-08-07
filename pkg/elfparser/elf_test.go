@@ -29,7 +29,12 @@ import (
 )
 
 var (
-	MAPINDEX = 8
+	MAP_SECTION_INDEX = 8
+	MAP_TYPE_1        = 27
+	MAP_KEY_SIZE_1    = 0
+	MAP_VALUE_SIZE_1  = 0
+	MAP_ENTRIES_1     = 262144
+	MAP_FLAGS_1       = 0
 )
 
 type testMocks struct {
@@ -161,7 +166,8 @@ func TestParseSection(t *testing.T) {
 		{
 			name:        "Test map section",
 			elfFileName: "../../test-data/tc.ingress.bpf.elf",
-			want:        MAPINDEX,
+			//Assumption is mapindex is always 8 based on elf data we are using. This can be any non-zero.
+			want: MAP_SECTION_INDEX,
 		},
 		{
 			name:        "Missing map section",
@@ -205,6 +211,7 @@ func TestParseSection(t *testing.T) {
 			want:        []string{"tc_cls", "kprobe/nf_ct_delete", "tracepoint/sched/sched_process_fork"},
 		},
 		{
+			// The elf file has supported and non-supported progs so we skip non-supported.
 			name:        "Test unsupported prog section",
 			elfFileName: "../../test-data/tc.bpf.elf",
 			want:        []string{"tc_cls"},
@@ -246,14 +253,14 @@ func TestParseSection(t *testing.T) {
 		wantErr     error
 	}{
 		{
-			name:        "Test reloc section",
+			name:        "Test reloc flow",
 			elfFileName: "../../test-data/tc.ingress.bpf.elf",
 			expectList:  []string{"kprobe", "tc_cls", "tracepoint", "xdp"},
 			want:        2,
 			wantErr:     nil,
 		},
 		{
-			name:        "Missing reloc section",
+			name:        "Validate elf file without reloc requirement",
 			elfFileName: "../../test-data/tc.bpf.elf",
 			expectList:  []string{"kprobe", "tc_cls", "tracepoint", "xdp"},
 			want:        0,
@@ -336,9 +343,8 @@ func TestParseMap(t *testing.T) {
 			if tt.wantErr != nil {
 				assert.EqualError(t, err, tt.wantErr.Error())
 			} else {
-				//gotMapIndex := elfLoader.mapSectionIndex
-				mapDataLen := len(mapData)
-				assert.Equal(t, tt.want, mapDataLen)
+				mapCount := len(mapData)
+				assert.Equal(t, tt.want, mapCount)
 			}
 		})
 	}
@@ -354,14 +360,14 @@ func TestParseMap(t *testing.T) {
 			name:        "Test map contents",
 			elfFileName: "../../test-data/test.map.bpf.elf",
 			invalidate:  false,
-			want:        []int{27, 0, 0, 262144, 0},
+			want:        []int{MAP_TYPE_1, MAP_KEY_SIZE_1, MAP_VALUE_SIZE_1, MAP_ENTRIES_1, MAP_FLAGS_1},
 			wantErr:     nil,
 		},
 		{
 			name:        "Invalid map contents",
 			elfFileName: "../../test-data/test.map.bpf.elf",
 			invalidate:  true,
-			want:        []int{27, 0, 0, 262144, 0},
+			want:        nil,
 			wantErr:     errors.New("missing data in map section"),
 		},
 	}
