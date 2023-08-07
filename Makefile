@@ -18,6 +18,17 @@ format:       ## Format all Go source code files.
 	  -name '*.go' \
 	  -print0 | sort -z | xargs -0 -- goimports $(or $(FORMAT_FLAGS),-w) | wc -l | bc)
 
+# ALLPKGS is the set of packages provided in source.
+ALLPKGS = $(shell go list ./...)
+
+# Check formatting of source code files without modification.
+check-format: FORMAT_FLAGS = -l
+check-format: format
+
+# Run go vet on source code.
+vet:    ## Run go vet on source code.
+	go vet $(ALLPKGS)
+
 # Build BPF
 CLANG := clang
 CLANG_INCLUDE := -I../../..
