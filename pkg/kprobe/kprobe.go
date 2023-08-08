@@ -30,9 +30,9 @@ import (
 var log = logger.Get()
 
 /*
- p[:[GRP/]EVENT] [MOD:]SYM[+offs]|MEMADDR [FETCHARGS]  : Set a probe
- r[MAXACTIVE][:[GRP/]EVENT] [MOD:]SYM[+0] [FETCHARGS]  : Set a return probe
- -:[GRP/]EVENT
+p[:[GRP/]EVENT] [MOD:]SYM[+offs]|MEMADDR [FETCHARGS]  : Set a probe
+r[MAXACTIVE][:[GRP/]EVENT] [MOD:]SYM[+0] [FETCHARGS]  : Set a return probe
+-:[GRP/]EVENT
 */
 func KprobeAttach(progFD int, eventName string, funcName string) error {
 
@@ -109,14 +109,14 @@ func KprobeAttach(progFD int, eventName string, funcName string) error {
 }
 
 /*
- p[:[GRP/]EVENT] [MOD:]SYM[+offs]|MEMADDR [FETCHARGS]  : Set a probe
- r[MAXACTIVE][:[GRP/]EVENT] [MOD:]SYM[+0] [FETCHARGS]  : Set a return probe
- -:[GRP/]EVENT
+	p[:[GRP/]EVENT] [MOD:]SYM[+offs]|MEMADDR [FETCHARGS]  : Set a probe
+	r[MAXACTIVE][:[GRP/]EVENT] [MOD:]SYM[+0] [FETCHARGS]  : Set a return probe
+	-:[GRP/]EVENT
 
 MAXACTIVE      : Maximum number of instances of the specified function that
-                 can be probed simultaneously, or 0 for the default value
-                 as defined in Documentation/kprobes.txt section 1.3.1.
 
+	can be probed simultaneously, or 0 for the default value
+	as defined in Documentation/kprobes.txt section 1.3.1.
 */
 func KretprobeAttach(progFD int, eventName string, funcName string) error {
 
