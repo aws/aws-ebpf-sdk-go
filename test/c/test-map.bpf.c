@@ -29,3 +29,5 @@ struct bpf_map_def_pvt SEC("maps") ingress_map = {
 	.map_flags = BPF_F_NO_PREALLOC,
 	.pinning = PIN_GLOBAL_NS,
 };
+
+char _license[] SEC("license") = "GPL";

@@ -8,9 +8,9 @@ import (
 	"text/tabwriter"
 	"unsafe"
 
+	goelf "github.com/aws/aws-ebpf-sdk-go/pkg/elfparser"
+	ebpf_tc "github.com/aws/aws-ebpf-sdk-go/pkg/tc"
 	"github.com/fatih/color"
-	"github.com/jayanthvn/pure-gobpf/pkg/ebpf_tc"
-	goelf "github.com/jayanthvn/pure-gobpf/pkg/elfparser"
 )
 
 type testFunc struct {
@@ -84,12 +84,12 @@ func main() {
 
 	fmt.Fprintln(summary, header)
 
-	for k, v := range testSummary {
-		if v == "FAILED" {
-			fmt.Fprintf(summary, "%s\t%s\n", k, color.RedString(v))
+	for testName, testStatus := range testSummary {
+		if testStatus == "FAILED" {
+			fmt.Fprintf(summary, "%s\t%s\n", testName, color.RedString(testStatus))
 		}
-		if v == "SUCCESS" {
-			fmt.Fprintf(summary, "%s\t%s\n", k, color.GreenString(v))
+		if testStatus == "SUCCESS" {
+			fmt.Fprintf(summary, "%s\t%s\n", testName, color.GreenString(testStatus))
 		}
 	}
 	summary.Flush()
@@ -103,8 +103,8 @@ func TestLoadProg() error {
 		return err
 	}
 
-	for k, _ := range progInfo {
-		fmt.Println("Prog Info: ", "Pin Path: ", k)
+	for pinPath, _ := range progInfo {
+		fmt.Println("Prog Info: ", "Pin Path: ", pinPath)
 	}
 	return nil
 }
@@ -116,8 +116,8 @@ func TestLoadMapWithNoProg() error {
 		return err
 	}
 
-	for k, _ := range loadedMap {
-		fmt.Println("Map Info: ", "Name: ", k)
+	for mapName, _ := range loadedMap {
+		fmt.Println("Map Info: ", "Name: ", mapName)
 	}
 	return nil
 
@@ -130,8 +130,8 @@ func TestMapOperations() error {
 		return err
 	}
 
-	for k, _ := range loadedMap {
-		fmt.Println("Map Info: ", "Name: ", k)
+	for mapName, _ := range loadedMap {
+		fmt.Println("Map Info: ", "Name: ", mapName)
 	}
 
 	type BPFInetTrieKey struct {
@@ -266,20 +266,20 @@ func TestLoadTCfilter() error {
 		return err
 	}
 
-	for k, _ := range progInfo {
-		fmt.Println("Prog Info: ", "Pin Path: ", k)
+	for pinPath, _ := range progInfo {
+		fmt.Println("Prog Info: ", "Pin Path: ", pinPath)
 	}
 
 	tcProg := progInfo["/sys/fs/bpf/globals/aws/programs/test_handle_ingress"].Program
 	progFD := tcProg.ProgFD
 
 	fmt.Println("Try Attach ingress probe")
-	err = ebpf_tc.TCIngressAttach("lo", int(progFD))
+	err = ebpf_tc.TCIngressAttach("lo", int(progFD), "ingress_test")
 	if err != nil {
 		fmt.Println("Failed attaching ingress probe")
 	}
 	fmt.Println("Try Attach egress probe")
-	err = ebpf_tc.TCEgressAttach("lo", int(progFD))
+	err = ebpf_tc.TCEgressAttach("lo", int(progFD), "egress_test")
 	if err != nil {
 		fmt.Println("Failed attaching ingress probe")
 	}
