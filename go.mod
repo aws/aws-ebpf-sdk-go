@@ -4,7 +4,7 @@ go 1.19
 
 require (
 	github.com/golang/mock v1.6.0
-	github.com/stretchr/testify v1.8.1
+	github.com/stretchr/testify v1.8.4
 	github.com/vishvananda/netlink v1.1.0
 	go.uber.org/zap v1.25.0
 	golang.org/x/sys v0.6.0
