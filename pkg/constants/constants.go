@@ -2,7 +2,7 @@ package constants
 
 type EBPFMapType uint32
 
-//Currently synced with 5.10.188 - https://elixir.bootlin.com/linux/v5.10.188/source/include/uapi/linux/bpf.h
+// Currently synced with 5.10.188 - https://elixir.bootlin.com/linux/v5.10.188/source/include/uapi/linux/bpf.h
 const (
 	// BPF map type constants. Must match enum bpf_map_type from linux/bpf.h
 	BPF_MAP_TYPE_UNSPEC EBPFMapType = iota
