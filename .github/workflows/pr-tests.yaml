@@ -27,6 +27,9 @@ jobs:
         run: |
           make check-format
           make vet
+      - name: Set up BPF
+        run: |
+          sudo apt-get install libbpf-dev    
       - name: Build
         run: make build-linux
       - name: Unit test
