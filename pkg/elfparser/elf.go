@@ -49,7 +49,7 @@ var sdkCache = cache.Get()
 
 type AWSeBpfSdkAPIs interface {
 	IncreaseRlimit() error
-	LoadBpfFile(path string) (map[string]BpfData, map[string]ebpf_maps.BpfMap, error)
+	LoadBpfFile(path, customizedPinPath string) (map[string]BpfData, map[string]ebpf_maps.BpfMap, error)
 	RecoverGlobalMaps() (map[string]ebpf_maps.BpfMap, error)
 	RecoverAllBpfProgramsAndMaps() (map[string]BpfData, error)
 }
@@ -97,9 +97,11 @@ func New() *bpfSDKClient {
 	}
 }
 
+var _ AWSeBpfSdkAPIs = (*bpfSDKClient)(nil)
+
 // This is not needed 5.11 kernel onwards because per-cgroup mem limits
 // https://lore.kernel.org/bpf/20201201215900.3569844-1-guro@fb.com/
-func IncreaseRlimit() error {
+func (b *bpfSDKClient) IncreaseRlimit() error {
 	err := unix.Setrlimit(unix.RLIMIT_MEMLOCK, &unix.Rlimit{Cur: unix.RLIM_INFINITY, Max: unix.RLIM_INFINITY})
 	if err != nil {
 		log.Infof("Failed to bump up the rlimit")
