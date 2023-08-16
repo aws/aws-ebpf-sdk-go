@@ -50,9 +50,9 @@ func (mr *MockAWSeBpfSdkAPIsMockRecorder) IncreaseRlimit() *gomock.Call {
 }
 
 // LoadBpfFile mocks base method.
-func (m *MockAWSeBpfSdkAPIs) LoadBpfFile(arg0 string) (map[string]elfparser.BpfData, map[string]maps.BpfMap, error) {
+func (m *MockAWSeBpfSdkAPIs) LoadBpfFile(arg0, arg1 string) (map[string]elfparser.BpfData, map[string]maps.BpfMap, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "LoadBpfFile", arg0)
+	ret := m.ctrl.Call(m, "LoadBpfFile", arg0, arg1)
 	ret0, _ := ret[0].(map[string]elfparser.BpfData)
 	ret1, _ := ret[1].(map[string]maps.BpfMap)
 	ret2, _ := ret[2].(error)
@@ -60,9 +60,9 @@ func (m *MockAWSeBpfSdkAPIs) LoadBpfFile(arg0 string) (map[string]elfparser.BpfD
 }
 
 // LoadBpfFile indicates an expected call of LoadBpfFile.
-func (mr *MockAWSeBpfSdkAPIsMockRecorder) LoadBpfFile(arg0 interface{}) *gomock.Call {
+func (mr *MockAWSeBpfSdkAPIsMockRecorder) LoadBpfFile(arg0, arg1 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "LoadBpfFile", reflect.TypeOf((*MockAWSeBpfSdkAPIs)(nil).LoadBpfFile), arg0)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "LoadBpfFile", reflect.TypeOf((*MockAWSeBpfSdkAPIs)(nil).LoadBpfFile), arg0, arg1)
 }
 
 // RecoverAllBpfProgramsAndMaps mocks base method.
