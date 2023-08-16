@@ -47,9 +47,21 @@ var (
 var log = logger.Get()
 var sdkCache = cache.Get()
 
+type AWSeBpfSdkAPIs interface {
+	IncreaseRlimit() error
+	LoadBpfFile(path, customizedPinPath string) (map[string]BpfData, map[string]ebpf_maps.BpfMap, error)
+	RecoverGlobalMaps() (map[string]ebpf_maps.BpfMap, error)
+	RecoverAllBpfProgramsAndMaps() (map[string]BpfData, error)
+}
+
 type BpfData struct {
 	Program ebpf_progs.BpfProgram       // Return the program
 	Maps    map[string]ebpf_maps.BpfMap // List of associated maps
+}
+
+type bpfSDKClient struct {
+	mapApi  ebpf_maps.BpfMapAPIs
+	progApi ebpf_progs.BpfProgAPIs
 }
 
 type relocationEntry struct {
@@ -78,9 +90,18 @@ type elfLoader struct {
 	progSectionMap map[uint32]progEntry
 }
 
+func New() *bpfSDKClient {
+	return &bpfSDKClient{
+		mapApi:  &ebpf_maps.BpfMap{},
+		progApi: &ebpf_progs.BpfProgram{},
+	}
+}
+
+var _ AWSeBpfSdkAPIs = (*bpfSDKClient)(nil)
+
 // This is not needed 5.11 kernel onwards because per-cgroup mem limits
 // https://lore.kernel.org/bpf/20201201215900.3569844-1-guro@fb.com/
-func IncreaseRlimit() error {
+func (b *bpfSDKClient) IncreaseRlimit() error {
 	err := unix.Setrlimit(unix.RLIMIT_MEMLOCK, &unix.Rlimit{Cur: unix.RLIM_INFINITY, Max: unix.RLIM_INFINITY})
 	if err != nil {
 		log.Infof("Failed to bump up the rlimit")
@@ -101,7 +122,7 @@ func newElfLoader(elfFile *elf.File, bpfmapapi ebpf_maps.BpfMapAPIs, bpfprogapi 
 	return elfloader
 }
 
-func LoadBpfFile(path, customizedPinPath string) (map[string]BpfData, map[string]ebpf_maps.BpfMap, error) {
+func (b *bpfSDKClient) LoadBpfFile(path, customizedPinPath string) (map[string]BpfData, map[string]ebpf_maps.BpfMap, error) {
 	bpfFile, err := os.Open(path)
 	if err != nil {
 		log.Infof("LoadBpfFile failed to open")
@@ -114,7 +135,7 @@ func LoadBpfFile(path, customizedPinPath string) (map[string]BpfData, map[string
 		return nil, nil, err
 	}
 
-	elfLoader := newElfLoader(elfFile, &ebpf_maps.BpfMap{}, &ebpf_progs.BpfProgram{}, customizedPinPath)
+	elfLoader := newElfLoader(elfFile, b.mapApi, b.progApi, customizedPinPath)
 
 	bpfLoadedProg, bpfLoadedMaps, err := elfLoader.doLoadELF()
 	if err != nil {
@@ -648,14 +669,13 @@ func IsMapGlobal(pinPath string) bool {
 	return true
 }
 
-func RecoverGlobalMaps() (map[string]ebpf_maps.BpfMap, error) {
+func (b *bpfSDKClient) RecoverGlobalMaps() (map[string]ebpf_maps.BpfMap, error) {
 	_, err := os.Stat(constdef.BPF_DIR_MNT)
 	if err != nil {
 		log.Infof("BPF FS director is not present")
 		return nil, fmt.Errorf("BPF directory is not present %v", err)
 	}
 	loadedGlobalMaps := make(map[string]ebpf_maps.BpfMap)
-	mapsApi := &ebpf_maps.BpfMap{}
 	var statfs syscall.Statfs_t
 	if err := syscall.Statfs(constdef.BPF_DIR_MNT, &statfs); err == nil && statfs.Type == unix.BPF_FS_MAGIC {
 		if err := filepath.Walk(constdef.MAP_BPF_FS, func(pinPath string, fsinfo os.FileInfo, err error) error {
@@ -666,7 +686,7 @@ func RecoverGlobalMaps() (map[string]ebpf_maps.BpfMap, error) {
 				log.Infof("Dumping pinpaths - ", pinPath)
 				if IsMapGlobal(pinPath) {
 					log.Infof("Found global pinpaths - ", pinPath)
-					bpfMapInfo, err := mapsApi.GetMapFromPinPath(pinPath)
+					bpfMapInfo, err := b.mapApi.GetMapFromPinPath(pinPath)
 					if err != nil {
 						log.Errorf("error getting mapInfo for Global pin path, this shouldn't happen")
 						return err
@@ -717,7 +737,7 @@ func RecoverGlobalMaps() (map[string]ebpf_maps.BpfMap, error) {
 	return loadedGlobalMaps, nil
 }
 
-func RecoverAllBpfProgramsAndMaps() (map[string]BpfData, error) {
+func (b *bpfSDKClient) RecoverAllBpfProgramsAndMaps() (map[string]BpfData, error) {
 	_, err := os.Stat(constdef.BPF_DIR_MNT)
 	if err != nil {
 		log.Infof("BPF FS directory is not present")
@@ -725,9 +745,6 @@ func RecoverAllBpfProgramsAndMaps() (map[string]BpfData, error) {
 	}
 
 	var statfs syscall.Statfs_t
-
-	mapsApi := &ebpf_maps.BpfMap{}
-	showProgApi := &ebpf_progs.BpfProgram{}
 
 	//Pass DS here
 	loadedPrograms := make(map[string]BpfData)
@@ -756,7 +773,7 @@ func RecoverAllBpfProgramsAndMaps() (map[string]BpfData, error) {
 				if !fsinfo.IsDir() {
 					log.Infof("Dumping pinpaths - ", pinPath)
 
-					bpfMapInfo, err := mapsApi.GetMapFromPinPath(pinPath)
+					bpfMapInfo, err := b.mapApi.GetMapFromPinPath(pinPath)
 					if err != nil {
 						log.Infof("error getting mapInfo for pin path, this shouldn't happen")
 						return err
@@ -811,7 +828,7 @@ func RecoverAllBpfProgramsAndMaps() (map[string]BpfData, error) {
 					}
 
 					//mapData := [string]ebpf_maps.BPFMap{}
-					bpfProgInfo, progFD, err := (showProgApi).GetProgFromPinPath(pinPath)
+					bpfProgInfo, progFD, err := (b.progApi).GetProgFromPinPath(pinPath)
 					if err != nil {
 						log.Infof("Failed to progInfo for pinPath %s", pinPath)
 						return err
