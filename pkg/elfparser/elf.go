@@ -47,7 +47,7 @@ var (
 var log = logger.Get()
 var sdkCache = cache.Get()
 
-type AWSeBpfSdkAPIs interface {
+type BpfSDKClient interface {
 	IncreaseRlimit() error
 	LoadBpfFile(path, customizedPinPath string) (map[string]BpfData, map[string]ebpf_maps.BpfMap, error)
 	RecoverGlobalMaps() (map[string]ebpf_maps.BpfMap, error)
@@ -59,7 +59,7 @@ type BpfData struct {
 	Maps    map[string]ebpf_maps.BpfMap // List of associated maps
 }
 
-type BpfSDKClient struct {
+type bpfSDKClient struct {
 	mapApi  ebpf_maps.BpfMapAPIs
 	progApi ebpf_progs.BpfProgAPIs
 }
@@ -90,18 +90,18 @@ type elfLoader struct {
 	progSectionMap map[uint32]progEntry
 }
 
-func New() *BpfSDKClient {
-	return &BpfSDKClient{
+func New() BpfSDKClient {
+	return &bpfSDKClient{
 		mapApi:  &ebpf_maps.BpfMap{},
 		progApi: &ebpf_progs.BpfProgram{},
 	}
 }
 
-var _ AWSeBpfSdkAPIs = (*BpfSDKClient)(nil)
+var _ BpfSDKClient = &bpfSDKClient{}
 
 // This is not needed 5.11 kernel onwards because per-cgroup mem limits
 // https://lore.kernel.org/bpf/20201201215900.3569844-1-guro@fb.com/
-func (b *BpfSDKClient) IncreaseRlimit() error {
+func (b *bpfSDKClient) IncreaseRlimit() error {
 	err := unix.Setrlimit(unix.RLIMIT_MEMLOCK, &unix.Rlimit{Cur: unix.RLIM_INFINITY, Max: unix.RLIM_INFINITY})
 	if err != nil {
 		log.Infof("Failed to bump up the rlimit")
@@ -122,7 +122,7 @@ func newElfLoader(elfFile *elf.File, bpfmapapi ebpf_maps.BpfMapAPIs, bpfprogapi 
 	return elfloader
 }
 
-func (b *BpfSDKClient) LoadBpfFile(path, customizedPinPath string) (map[string]BpfData, map[string]ebpf_maps.BpfMap, error) {
+func (b *bpfSDKClient) LoadBpfFile(path, customizedPinPath string) (map[string]BpfData, map[string]ebpf_maps.BpfMap, error) {
 	bpfFile, err := os.Open(path)
 	if err != nil {
 		log.Infof("LoadBpfFile failed to open")
@@ -669,7 +669,7 @@ func IsMapGlobal(pinPath string) bool {
 	return true
 }
 
-func (b *BpfSDKClient) RecoverGlobalMaps() (map[string]ebpf_maps.BpfMap, error) {
+func (b *bpfSDKClient) RecoverGlobalMaps() (map[string]ebpf_maps.BpfMap, error) {
 	_, err := os.Stat(constdef.BPF_DIR_MNT)
 	if err != nil {
 		log.Infof("BPF FS director is not present")
@@ -737,7 +737,7 @@ func (b *BpfSDKClient) RecoverGlobalMaps() (map[string]ebpf_maps.BpfMap, error) 
 	return loadedGlobalMaps, nil
 }
 
-func (b *BpfSDKClient) RecoverAllBpfProgramsAndMaps() (map[string]BpfData, error) {
+func (b *bpfSDKClient) RecoverAllBpfProgramsAndMaps() (map[string]BpfData, error) {
 	_, err := os.Stat(constdef.BPF_DIR_MNT)
 	if err != nil {
 		log.Infof("BPF FS directory is not present")
