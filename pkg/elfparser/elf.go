@@ -97,7 +97,7 @@ func New() BpfSDKClient {
 	}
 }
 
-var _ BpfSDKClient = (*bpfSDKClient)(nil)
+var _ BpfSDKClient = &bpfSDKClient{}
 
 // This is not needed 5.11 kernel onwards because per-cgroup mem limits
 // https://lore.kernel.org/bpf/20201201215900.3569844-1-guro@fb.com/
