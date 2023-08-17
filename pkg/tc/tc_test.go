@@ -74,7 +74,10 @@ func unmount_bpf_fs() error {
 func setupTest(interfaceNames []string, t *testing.T) {
 	mount_bpf_fs()
 	for _, interfaceName := range interfaceNames {
-		if err := netlink.LinkAdd(&netlink.Ifb{netlink.LinkAttrs{Name: interfaceName}}); err != nil {
+		linkAttr := netlink.LinkAttrs{Name: interfaceName}
+		linkIFB := netlink.Ifb{}
+		linkIFB.LinkAttrs = linkAttr
+		if err := netlink.LinkAdd(&linkIFB); err != nil {
 			assert.NoError(t, err)
 		}
 	}
@@ -84,7 +87,10 @@ func teardownTest(interfaceNames []string, t *testing.T) {
 	unmount_bpf_fs()
 	//Cleanup link
 	for _, interfaceName := range interfaceNames {
-		if err := netlink.LinkDel(&netlink.Ifb{netlink.LinkAttrs{Name: interfaceName}}); err != nil {
+		linkAttr := netlink.LinkAttrs{Name: interfaceName}
+		linkIFB := netlink.Ifb{}
+		linkIFB.LinkAttrs = linkAttr
+		if err := netlink.LinkDel(&linkIFB); err != nil {
 			assert.NoError(t, err)
 		}
 	}
