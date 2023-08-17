@@ -31,6 +31,25 @@ const (
 
 var log = logger.Get()
 
+type BpfTcAPIs interface {
+	TCIngressAttach(interfaceName string, progFD int, funcName string) error
+	TCIngressDetach(interfaceName string) error
+	TCEgressAttach(interfaceName string, progFD int, funcName string) error
+	TCEgressDetach(interfaceName string) error
+	CleanupQdiscs(prefix string, ingressCleanup bool, egressCleanup bool) error
+}
+
+type BpfTc struct {
+	InterfacePrefix string
+}
+
+func New(interfacePrefix string) *BpfTc {
+	return &BpfTc{
+		InterfacePrefix: interfacePrefix,
+	}
+
+}
+
 func enableQdisc(link netlink.Link) bool {
 	qdiscs, err := netlink.QdiscList(link)
 	if err != nil {
@@ -54,7 +73,20 @@ func enableQdisc(link netlink.Link) bool {
 
 }
 
-func TCIngressAttach(interfaceName string, progFD int, funcName string) error {
+func (m *BpfTc) mismatchedInterfacePrefix(interfaceName string) error {
+	if !strings.HasPrefix(interfaceName, m.InterfacePrefix) {
+		log.Errorf("expected prefix - %s but got %s", m.InterfacePrefix, interfaceName)
+		return errors.New("Mismatched initialized prefix name and passed interface name")
+	}
+	return nil
+}
+
+func (m *BpfTc) TCIngressAttach(interfaceName string, progFD int, funcName string) error {
+
+	if err := m.mismatchedInterfacePrefix(interfaceName); err != nil {
+		return err
+	}
+
 	intf, err := netlink.LinkByName(interfaceName)
 	if err != nil {
 		log.Errorf("failed to find device by name %s: %w", interfaceName, err)
@@ -101,7 +133,12 @@ func TCIngressAttach(interfaceName string, progFD int, funcName string) error {
 	return nil
 }
 
-func TCIngressDetach(interfaceName string) error {
+func (m *BpfTc) TCIngressDetach(interfaceName string) error {
+
+	if err := m.mismatchedInterfacePrefix(interfaceName); err != nil {
+		return err
+	}
+
 	intf, err := netlink.LinkByName(interfaceName)
 	if err != nil {
 		log.Errorf("failed to find device by name %s: %w", interfaceName, err)
@@ -132,7 +169,12 @@ func TCIngressDetach(interfaceName string) error {
 	return fmt.Errorf("no active filter to detach-%s", interfaceName)
 }
 
-func TCEgressAttach(interfaceName string, progFD int, funcName string) error {
+func (m *BpfTc) TCEgressAttach(interfaceName string, progFD int, funcName string) error {
+
+	if err := m.mismatchedInterfacePrefix(interfaceName); err != nil {
+		return err
+	}
+
 	intf, err := netlink.LinkByName(interfaceName)
 	if err != nil {
 		log.Errorf("failed to find device by name %s: %w", interfaceName, err)
@@ -179,7 +221,12 @@ func TCEgressAttach(interfaceName string, progFD int, funcName string) error {
 	return nil
 }
 
-func TCEgressDetach(interfaceName string) error {
+func (m *BpfTc) TCEgressDetach(interfaceName string) error {
+
+	if err := m.mismatchedInterfacePrefix(interfaceName); err != nil {
+		return err
+	}
+
 	intf, err := netlink.LinkByName(interfaceName)
 	if err != nil {
 		log.Errorf("failed to find device by name %s: %w", interfaceName, err)
@@ -210,9 +257,9 @@ func TCEgressDetach(interfaceName string) error {
 	return fmt.Errorf("no active filter to detach-%s", interfaceName)
 }
 
-func CleanupQdiscs(prefix string, ingressCleanup bool, egressCleanup bool) error {
+func (m *BpfTc) CleanupQdiscs(ingressCleanup bool, egressCleanup bool) error {
 
-	if prefix == "" {
+	if m.InterfacePrefix == "" {
 		log.Errorf("invalid empty prefix")
 		return nil
 	}
@@ -225,10 +272,10 @@ func CleanupQdiscs(prefix string, ingressCleanup bool, egressCleanup bool) error
 
 	for _, link := range linkList {
 		linkName := link.Attrs().Name
-		if strings.HasPrefix(linkName, prefix) {
+		if strings.HasPrefix(linkName, m.InterfacePrefix) {
 			if ingressCleanup {
 				log.Infof("Trying to cleanup ingress on %s", linkName)
-				err = TCIngressDetach(linkName)
+				err = m.TCIngressDetach(linkName)
 				if err != nil {
 					if err.Error() == FILTER_CLEANUP_FAILED {
 						log.Errorf("failed to detach ingress, might not be present so moving on")
@@ -238,7 +285,7 @@ func CleanupQdiscs(prefix string, ingressCleanup bool, egressCleanup bool) error
 
 			if egressCleanup {
 				log.Infof("Trying to cleanup egress on %s", linkName)
-				err = TCEgressDetach(linkName)
+				err = m.TCEgressDetach(linkName)
 				if err != nil {
 					if err.Error() == FILTER_CLEANUP_FAILED {
 						log.Errorf("failed to detach egress, might not be present so moving on")
