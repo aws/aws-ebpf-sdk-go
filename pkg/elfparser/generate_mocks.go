@@ -12,4 +12,4 @@
 // permissions and limitations under the License.
 package elfparser
 
-//go:generate go run github.com/golang/mock/mockgen -destination mocks/elfparser_mocks.go . AWSeBpfSdkAPIs
+//go:generate go run github.com/golang/mock/mockgen -destination mocks/elfparser_mocks.go . BpfSDKClient
