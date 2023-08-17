@@ -31,20 +31,22 @@ const (
 
 var log = logger.Get()
 
-type BpfTcAPIs interface {
+type BpfTc interface {
 	TCIngressAttach(interfaceName string, progFD int, funcName string) error
 	TCIngressDetach(interfaceName string) error
 	TCEgressAttach(interfaceName string, progFD int, funcName string) error
 	TCEgressDetach(interfaceName string) error
-	CleanupQdiscs(prefix string, ingressCleanup bool, egressCleanup bool) error
+	CleanupQdiscs(ingressCleanup bool, egressCleanup bool) error
 }
 
-type BpfTc struct {
+var _ BpfTc = &bpfTc{}
+
+type bpfTc struct {
 	InterfacePrefix string
 }
 
-func New(interfacePrefix string) *BpfTc {
-	return &BpfTc{
+func New(interfacePrefix string) BpfTc {
+	return &bpfTc{
 		InterfacePrefix: interfacePrefix,
 	}
 
@@ -73,7 +75,7 @@ func enableQdisc(link netlink.Link) bool {
 
 }
 
-func (m *BpfTc) mismatchedInterfacePrefix(interfaceName string) error {
+func (m *bpfTc) mismatchedInterfacePrefix(interfaceName string) error {
 	if !strings.HasPrefix(interfaceName, m.InterfacePrefix) {
 		log.Errorf("expected prefix - %s but got %s", m.InterfacePrefix, interfaceName)
 		return errors.New("Mismatched initialized prefix name and passed interface name")
@@ -81,7 +83,7 @@ func (m *BpfTc) mismatchedInterfacePrefix(interfaceName string) error {
 	return nil
 }
 
-func (m *BpfTc) TCIngressAttach(interfaceName string, progFD int, funcName string) error {
+func (m *bpfTc) TCIngressAttach(interfaceName string, progFD int, funcName string) error {
 
 	if err := m.mismatchedInterfacePrefix(interfaceName); err != nil {
 		return err
@@ -133,7 +135,7 @@ func (m *BpfTc) TCIngressAttach(interfaceName string, progFD int, funcName strin
 	return nil
 }
 
-func (m *BpfTc) TCIngressDetach(interfaceName string) error {
+func (m *bpfTc) TCIngressDetach(interfaceName string) error {
 
 	if err := m.mismatchedInterfacePrefix(interfaceName); err != nil {
 		return err
@@ -169,7 +171,7 @@ func (m *BpfTc) TCIngressDetach(interfaceName string) error {
 	return fmt.Errorf("no active filter to detach-%s", interfaceName)
 }
 
-func (m *BpfTc) TCEgressAttach(interfaceName string, progFD int, funcName string) error {
+func (m *bpfTc) TCEgressAttach(interfaceName string, progFD int, funcName string) error {
 
 	if err := m.mismatchedInterfacePrefix(interfaceName); err != nil {
 		return err
@@ -221,7 +223,7 @@ func (m *BpfTc) TCEgressAttach(interfaceName string, progFD int, funcName string
 	return nil
 }
 
-func (m *BpfTc) TCEgressDetach(interfaceName string) error {
+func (m *bpfTc) TCEgressDetach(interfaceName string) error {
 
 	if err := m.mismatchedInterfacePrefix(interfaceName); err != nil {
 		return err
@@ -257,7 +259,7 @@ func (m *BpfTc) TCEgressDetach(interfaceName string) error {
 	return fmt.Errorf("no active filter to detach-%s", interfaceName)
 }
 
-func (m *BpfTc) CleanupQdiscs(ingressCleanup bool, egressCleanup bool) error {
+func (m *bpfTc) CleanupQdiscs(ingressCleanup bool, egressCleanup bool) error {
 
 	if m.InterfacePrefix == "" {
 		log.Errorf("invalid empty prefix")

@@ -39,7 +39,7 @@ type testMocks struct {
 	ctrl       *gomock.Controller
 	ebpf_progs *mock_ebpf_progs.MockBpfProgAPIs
 	ebpf_maps  *mock_ebpf_maps.MockBpfMapAPIs
-	tcClient   *BpfTc
+	tcClient   BpfTc
 }
 
 func setup(t *testing.T, testPath string, interfacePrefix string) *testMocks {
