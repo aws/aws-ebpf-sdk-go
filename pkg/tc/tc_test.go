@@ -97,14 +97,38 @@ func teardownTest(interfaceNames []string, t *testing.T) {
 }
 
 func TestMismatchedPrefixName(t *testing.T) {
-	m := setup(t, "../../test-data/tc.bpf.elf", "f")
+	m := setup(t, "../../test-data/tc.bpf.elf", "eni")
 	defer m.ctrl.Finish()
 
-	interfaceName := "eni1"
-	if err := m.tcClient.TCIngressDetach(interfaceName); err != nil {
-		assert.Error(t, err)
+	tests := []struct {
+		name          string
+		interfaceName string
+		wantErr       error
+	}{
+		{
+			name:          "Test Matched Prefix",
+			interfaceName: "eni1",
+			wantErr:       nil,
+		},
+		{
+			name:          "Test Mismatched Prefix",
+			interfaceName: "fni1",
+			wantErr:       errors.New("Mismatched initialized prefix name and passed interface name"),
+		},
 	}
 
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+
+			testTcClient := New("eni")
+			err := testTcClient.mismatchedInterfacePrefix(tt.interfaceName)
+			if tt.wantErr != nil {
+				assert.EqualError(t, err, tt.wantErr.Error())
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
 }
 
 func TestTCIngressAttachDetach(t *testing.T) {

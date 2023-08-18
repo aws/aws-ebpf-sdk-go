@@ -37,6 +37,7 @@ type BpfTc interface {
 	TCEgressAttach(interfaceName string, progFD int, funcName string) error
 	TCEgressDetach(interfaceName string) error
 	CleanupQdiscs(ingressCleanup bool, egressCleanup bool) error
+	mismatchedInterfacePrefix(interfaceName string) error
 }
 
 var _ BpfTc = &bpfTc{}
