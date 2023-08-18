@@ -107,7 +107,7 @@ func TestMismatchedPrefixName(t *testing.T) {
 
 }
 
-func TestTCIngressAttach(t *testing.T) {
+func TestTCIngressAttachDetach(t *testing.T) {
 	if os.Getuid() != 0 {
 		t.Skip("Test requires root privileges.")
 	}
@@ -146,7 +146,7 @@ func TestTCIngressAttach(t *testing.T) {
 	}
 }
 
-func TestTCEgressAttach(t *testing.T) {
+func TestTCEgressAttachDetach(t *testing.T) {
 	if os.Getuid() != 0 {
 		t.Skip("Test requires root privileges.")
 	}
