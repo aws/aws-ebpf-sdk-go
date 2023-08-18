@@ -33,6 +33,6 @@ jobs:
       - name: Build
         run: make build-linux
       - name: Unit test
-        run: make unit-test
+        run: sudo make unit-test
       - name: Upload code coverage
         uses: codecov/codecov-action@v3
