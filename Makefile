@@ -43,7 +43,9 @@ EBPF_TEST_LIC_BINARY := test-data/test_license.bpf.elf
 EBPF_TEST_INV_MAP_SOURCE := test-data/invalid_map.bpf.c
 EBPF_TEST_INV_MAP_BINARY := test-data/invalid_map.bpf.elf
 EBPF_TEST_RECOVERY_SOURCE := test-data/recoverydata.bpf.c
-EBPF_TEST_RECOVERY_BINARY := test-data/recoverydata.bpf.elf   
+EBPF_TEST_RECOVERY_BINARY := test-data/recoverydata.bpf.elf
+EBPF_TEST_KPROBE_SOURCE := test-data/test-kprobe.bpf.c
+EBPF_TEST_KPROBE_BINARY := test-data/test-kprobe.bpf.elf    
 build-bpf: ## Build BPF
 	$(CLANG) $(CLANG_INCLUDE) -g -O2 -Wall -fpie -target bpf -DCORE -D__BPF_TRACING__ -march=bpf -D__TARGET_ARCH_$(ARCH) -c $(EBPF_SOURCE) -o $(EBPF_BINARY)
 	$(CLANG) $(CLANG_INCLUDE) -g -O2 -Wall -fpie -target bpf -DCORE -D__BPF_TRACING__ -march=bpf -D__TARGET_ARCH_$(ARCH) -c $(EBPF_TEST_SOURCE) -o $(EBPF_TEST_BINARY)
@@ -51,6 +53,7 @@ build-bpf: ## Build BPF
 	$(CLANG) $(CLANG_INCLUDE) -g -O2 -Wall -fpie -target bpf -DCORE -D__BPF_TRACING__ -march=bpf -D__TARGET_ARCH_$(ARCH) -c $(EBPF_TEST_LIC_SOURCE) -o $(EBPF_TEST_LIC_BINARY)
 	$(CLANG) $(CLANG_INCLUDE) -g -O2 -Wall -fpie -target bpf -DCORE -D__BPF_TRACING__ -march=bpf -D__TARGET_ARCH_$(ARCH) -c $(EBPF_TEST_INV_MAP_SOURCE) -o $(EBPF_TEST_INV_MAP_BINARY)
 	$(CLANG) $(CLANG_INCLUDE) -g -O2 -Wall -fpie -target bpf -DCORE -D__BPF_TRACING__ -march=bpf -D__TARGET_ARCH_$(ARCH) -c $(EBPF_TEST_RECOVERY_SOURCE) -o $(EBPF_TEST_RECOVERY_BINARY)
+	$(CLANG) $(CLANG_INCLUDE) -g -O2 -Wall -fpie -target bpf -DCORE -D__BPF_TRACING__ -march=bpf -D__TARGET_ARCH_$(ARCH) -c $(EBPF_TEST_KPROBE_SOURCE) -o $(EBPF_TEST_KPROBE_BINARY)
 
 vmlinuxh:
 	bpftool btf dump file /sys/kernel/btf/vmlinux format c > $(abspath ./test-data/vmlinux.h)

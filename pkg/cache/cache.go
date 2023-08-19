@@ -20,12 +20,18 @@ import (
 	"github.com/aws/aws-ebpf-sdk-go/pkg/logger"
 )
 
-var sdkCache *GlobalCacheMap
+var sdkCache GlobalCache
 var log = logger.Get()
 
 // Adding a struct if in future we need a cleanup routine
 type CacheValue struct {
 	mapFD int
+}
+
+type GlobalCache interface {
+	Set(key string, value int)
+	Get(key string) (int, bool)
+	Delete(key string)
 }
 
 type GlobalCacheMap struct {
@@ -49,7 +55,7 @@ func (c *GlobalCacheMap) Delete(key string) {
 	c.globalMap.Delete(key)
 }
 
-func Get() *GlobalCacheMap {
+func Get() GlobalCache {
 	if sdkCache == nil {
 		sdkCache = New()
 		log.Info("Initialized new SDK cache as an existing instance was not found")
@@ -57,8 +63,8 @@ func Get() *GlobalCacheMap {
 	return sdkCache
 }
 
-func New() *GlobalCacheMap {
-	sdkCache := &GlobalCacheMap{
+func New() GlobalCache {
+	sdkCache = &GlobalCacheMap{
 		globalMap: new(sync.Map),
 	}
 	return sdkCache
