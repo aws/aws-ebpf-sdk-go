@@ -17,22 +17,22 @@ package elfparser
 import (
 	"debug/elf"
 	"errors"
-	"fmt"
 	"os"
 	"sort"
 	"strings"
-	"syscall"
 	"testing"
 
+	constdef "github.com/aws/aws-ebpf-sdk-go/pkg/constants"
 	mock_ebpf_maps "github.com/aws/aws-ebpf-sdk-go/pkg/maps/mocks"
 	mock_ebpf_progs "github.com/aws/aws-ebpf-sdk-go/pkg/progs/mocks"
+	"github.com/aws/aws-ebpf-sdk-go/pkg/utils"
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/assert"
 )
 
 var (
 	MAP_SECTION_INDEX = 8
-	MAP_TYPE_1        = 9
+	MAP_TYPE_1        = int(constdef.BPF_MAP_TYPE_LRU_HASH.Index())
 	MAP_KEY_SIZE_1    = 16
 	MAP_VALUE_SIZE_1  = 4
 	MAP_ENTRIES_1     = 65536
@@ -62,28 +62,24 @@ func TestLoad(t *testing.T) {
 		elfFileName string
 		wantMap     int
 		wantProg    int
-		wantErr     error
 	}{
 		{
 			name:        "Test Load ELF",
 			elfFileName: "../../test-data/tc.ingress.bpf.elf",
 			wantMap:     3,
 			wantProg:    3,
-			wantErr:     nil,
 		},
 		{
 			name:        "Test Load ELF without reloc",
 			elfFileName: "../../test-data/tc.bpf.elf",
 			wantMap:     0,
 			wantProg:    1,
-			wantErr:     nil,
 		},
 		{
 			name:        "Missing prog data",
 			elfFileName: "../../test-data/test.map.bpf.elf",
 			wantMap:     1,
 			wantProg:    0,
-			wantErr:     nil,
 		},
 	}
 
@@ -107,13 +103,8 @@ func TestLoad(t *testing.T) {
 			elfLoader := newElfLoader(elfFile, m.ebpf_maps, m.ebpf_progs, "test")
 			loadedProgs, loadedMaps, err := elfLoader.doLoadELF()
 			assert.NoError(t, err)
-
-			if tt.wantErr != nil {
-				assert.EqualError(t, err, tt.wantErr.Error())
-			} else {
-				assert.Equal(t, tt.wantProg, len(loadedProgs))
-				assert.Equal(t, tt.wantMap, len(loadedMaps))
-			}
+			assert.Equal(t, tt.wantProg, len(loadedProgs))
+			assert.Equal(t, tt.wantMap, len(loadedMaps))
 		})
 	}
 }
@@ -508,28 +499,10 @@ func TestParseProg(t *testing.T) {
 
 }
 
-func mount_bpf_fs() error {
-	fmt.Println("Let's mount BPF FS")
-	err := syscall.Mount("bpf", "/sys/fs/bpf", "bpf", 0, "mode=0700")
-	if err != nil {
-		fmt.Println("error mounting bpffs")
-	}
-	return err
-}
-
-func unmount_bpf_fs() error {
-	fmt.Println("Let's unmount BPF FS")
-	err := syscall.Unmount("/sys/fs/bpf", 0)
-	if err != nil {
-		fmt.Println("error unmounting bpffs")
-	}
-	return err
-}
-
 func TestRecovery(t *testing.T) {
 
-	mount_bpf_fs()
-	defer unmount_bpf_fs()
+	utils.Mount_bpf_fs()
+	defer utils.Unmount_bpf_fs()
 
 	progtests := []struct {
 		name          string
@@ -556,8 +529,9 @@ func TestRecovery(t *testing.T) {
 		{
 			name:         "Missing BPF mount",
 			elfFileName:  "../../test-data/recoverydata.bpf.elf",
+			wantProg:     0,
 			forceUnMount: true,
-			wantErr:      errors.New("error checking BPF FS might not be mounted"),
+			wantErr:      errors.New("error checking BPF FS, please make sure it is mounted"),
 		},
 	}
 
@@ -587,7 +561,7 @@ func TestRecovery(t *testing.T) {
 				}
 
 				if tt.forceUnMount {
-					unmount_bpf_fs()
+					utils.Unmount_bpf_fs()
 				}
 				recoveredData, err := bpfSDKclient.RecoverAllBpfProgramsAndMaps()
 				if tt.wantErr != nil {
