@@ -120,8 +120,7 @@ func TestMismatchedPrefixName(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 
-			testTcClient := New("eni")
-			err := testTcClient.mismatchedInterfacePrefix(tt.interfaceName)
+			err := mismatchedInterfacePrefix(tt.interfaceName, "eni")
 			if tt.wantErr != nil {
 				assert.EqualError(t, err, tt.wantErr.Error())
 			} else {

@@ -22,30 +22,48 @@ import (
 
 var log = logger.Get()
 
-func XDPAttach(interfaceName string, progFD int) error {
+type BpfXdp interface {
+	XDPAttach(progFD int) error
+	XDPDetach() error
+}
 
-	link, err := netlink.LinkByName(interfaceName)
+var _ BpfXdp = &bpfXdp{}
+
+type bpfXdp struct {
+	interfaceName string
+}
+
+func New(ifName string) BpfXdp {
+	return &bpfXdp{
+		interfaceName: ifName,
+	}
+
+}
+
+func (b *bpfXdp) XDPAttach(progFD int) error {
+
+	link, err := netlink.LinkByName(b.interfaceName)
 	if err != nil {
-		log.Errorf("failed to obtain link info for %s : %v", interfaceName, err)
+		log.Errorf("failed to obtain link info for %s : %v", b.interfaceName, err)
 		return err
 	}
 
-	log.Infof("Attaching xdp prog %d to interface %s", progFD, interfaceName)
+	log.Infof("Attaching xdp prog %d to interface %s", progFD, b.interfaceName)
 
 	if err := netlink.LinkSetXdpFdWithFlags(link, progFD, constdef.XDP_ATTACH_MODE_SKB); err != nil {
 		log.Errorf("failed to setup xdp: %v", err)
 		return err
 	}
-	log.Infof("Attached XDP to interface %s", interfaceName)
+	log.Infof("Attached XDP to interface %s", b.interfaceName)
 
 	return nil
 }
 
-func XDPDetach(interfaceName string) error {
+func (b *bpfXdp) XDPDetach() error {
 
-	link, err := netlink.LinkByName(interfaceName)
+	link, err := netlink.LinkByName(b.interfaceName)
 	if err != nil {
-		log.Errorf("failed to obtain link info for %s : %v", interfaceName, err)
+		log.Errorf("failed to obtain link info for %s : %v", b.interfaceName, err)
 		return err
 	}
 

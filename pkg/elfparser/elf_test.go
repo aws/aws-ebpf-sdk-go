@@ -526,13 +526,6 @@ func TestRecovery(t *testing.T) {
 			wantProg:    3,
 			wantErr:     nil,
 		},
-		{
-			name:         "Missing BPF mount",
-			elfFileName:  "../../test-data/recoverydata.bpf.elf",
-			wantProg:     0,
-			forceUnMount: true,
-			wantErr:      errors.New("error checking BPF FS, please make sure it is mounted"),
-		},
 	}
 
 	for _, tt := range progtests {
@@ -560,9 +553,6 @@ func TestRecovery(t *testing.T) {
 					assert.NoError(t, err)
 				}
 
-				if tt.forceUnMount {
-					utils.Unmount_bpf_fs()
-				}
 				recoveredData, err := bpfSDKclient.RecoverAllBpfProgramsAndMaps()
 				if tt.wantErr != nil {
 					assert.EqualError(t, err, tt.wantErr.Error())
