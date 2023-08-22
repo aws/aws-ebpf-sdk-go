@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"os"
 	"runtime"
+	"syscall"
 	"unsafe"
 
 	constdef "github.com/aws/aws-ebpf-sdk-go/pkg/constants"
@@ -174,4 +175,22 @@ func (b *BPFInsn) ConvertBPFInstructionToByteStream() []byte {
 	binary.LittleEndian.PutUint32(res[4:], uint32(b.Imm))
 
 	return res
+}
+
+func Mount_bpf_fs() error {
+	fmt.Println("Let's mount BPF FS")
+	err := syscall.Mount("bpf", "/sys/fs/bpf", "bpf", 0, "mode=0700")
+	if err != nil {
+		fmt.Println("error mounting bpffs")
+	}
+	return err
+}
+
+func Unmount_bpf_fs() error {
+	fmt.Println("Let's unmount BPF FS")
+	err := syscall.Unmount("/sys/fs/bpf", 0)
+	if err != nil {
+		fmt.Println("error unmounting bpffs")
+	}
+	return err
 }

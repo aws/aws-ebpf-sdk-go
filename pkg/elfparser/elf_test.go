@@ -22,18 +22,20 @@ import (
 	"strings"
 	"testing"
 
+	constdef "github.com/aws/aws-ebpf-sdk-go/pkg/constants"
 	mock_ebpf_maps "github.com/aws/aws-ebpf-sdk-go/pkg/maps/mocks"
 	mock_ebpf_progs "github.com/aws/aws-ebpf-sdk-go/pkg/progs/mocks"
+	"github.com/aws/aws-ebpf-sdk-go/pkg/utils"
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/assert"
 )
 
 var (
 	MAP_SECTION_INDEX = 8
-	MAP_TYPE_1        = 27
-	MAP_KEY_SIZE_1    = 0
-	MAP_VALUE_SIZE_1  = 0
-	MAP_ENTRIES_1     = 262144
+	MAP_TYPE_1        = int(constdef.BPF_MAP_TYPE_LRU_HASH.Index())
+	MAP_KEY_SIZE_1    = 16
+	MAP_VALUE_SIZE_1  = 4
+	MAP_ENTRIES_1     = 65536
 	MAP_FLAGS_1       = 0
 )
 
@@ -54,64 +56,57 @@ func setup(t *testing.T, testPath string) *testMocks {
 	}
 }
 
-func TestLoadelf(t *testing.T) {
-	m := setup(t, "../../test-data/tc.ingress.bpf.elf")
-	defer m.ctrl.Finish()
-	f, _ := os.Open(m.path)
-	defer f.Close()
+func TestLoad(t *testing.T) {
+	progtests := []struct {
+		name        string
+		elfFileName string
+		wantMap     int
+		wantProg    int
+	}{
+		{
+			name:        "Test Load ELF",
+			elfFileName: "../../test-data/tc.ingress.bpf.elf",
+			wantMap:     3,
+			wantProg:    3,
+		},
+		{
+			name:        "Test Load ELF without reloc",
+			elfFileName: "../../test-data/tc.bpf.elf",
+			wantMap:     0,
+			wantProg:    1,
+		},
+		{
+			name:        "Missing prog data",
+			elfFileName: "../../test-data/test.map.bpf.elf",
+			wantMap:     1,
+			wantProg:    0,
+		},
+	}
 
-	m.ebpf_maps.EXPECT().CreateBPFMap(gomock.Any()).AnyTimes()
-	m.ebpf_progs.EXPECT().LoadProg(gomock.Any()).AnyTimes()
-	m.ebpf_maps.EXPECT().PinMap(gomock.Any(), gomock.Any()).AnyTimes()
-	m.ebpf_maps.EXPECT().GetMapFromPinPath(gomock.Any()).AnyTimes()
-	m.ebpf_progs.EXPECT().GetProgFromPinPath(gomock.Any()).AnyTimes()
-	m.ebpf_progs.EXPECT().GetBPFProgAssociatedMapsIDs(gomock.Any()).AnyTimes()
-	elfFile, err := elf.NewFile(f)
-	assert.NoError(t, err)
+	for _, tt := range progtests {
+		t.Run(tt.name, func(t *testing.T) {
 
-	elfLoader := newElfLoader(elfFile, m.ebpf_maps, m.ebpf_progs, "test")
-	_, _, err = elfLoader.doLoadELF()
-	assert.NoError(t, err)
-}
+			m := setup(t, tt.elfFileName)
+			defer m.ctrl.Finish()
+			f, _ := os.Open(m.path)
+			defer f.Close()
 
-func TestLoadelfWithoutReloc(t *testing.T) {
-	m := setup(t, "../../test-data/tc.bpf.elf")
-	defer m.ctrl.Finish()
-	f, _ := os.Open(m.path)
-	defer f.Close()
+			m.ebpf_maps.EXPECT().CreateBPFMap(gomock.Any()).AnyTimes()
+			m.ebpf_progs.EXPECT().LoadProg(gomock.Any()).AnyTimes()
+			m.ebpf_maps.EXPECT().PinMap(gomock.Any(), gomock.Any()).AnyTimes()
+			m.ebpf_maps.EXPECT().GetMapFromPinPath(gomock.Any()).AnyTimes()
+			m.ebpf_progs.EXPECT().GetProgFromPinPath(gomock.Any()).AnyTimes()
+			m.ebpf_progs.EXPECT().GetBPFProgAssociatedMapsIDs(gomock.Any()).AnyTimes()
 
-	m.ebpf_maps.EXPECT().CreateBPFMap(gomock.Any()).AnyTimes()
-	m.ebpf_progs.EXPECT().LoadProg(gomock.Any()).AnyTimes()
-	m.ebpf_maps.EXPECT().PinMap(gomock.Any(), gomock.Any()).AnyTimes()
-	m.ebpf_maps.EXPECT().GetMapFromPinPath(gomock.Any()).AnyTimes()
-	m.ebpf_progs.EXPECT().GetProgFromPinPath(gomock.Any()).AnyTimes()
-	m.ebpf_progs.EXPECT().GetBPFProgAssociatedMapsIDs(gomock.Any()).AnyTimes()
-
-	elfFile, err := elf.NewFile(f)
-	assert.NoError(t, err)
-	elfLoader := newElfLoader(elfFile, m.ebpf_maps, m.ebpf_progs, "test")
-	_, _, err = elfLoader.doLoadELF()
-	assert.NoError(t, err)
-}
-
-func TestLoadelfWithoutProg(t *testing.T) {
-	m := setup(t, "../../test-data/test.map.bpf.elf")
-	defer m.ctrl.Finish()
-	f, _ := os.Open(m.path)
-	defer f.Close()
-
-	m.ebpf_maps.EXPECT().CreateBPFMap(gomock.Any()).AnyTimes()
-	m.ebpf_progs.EXPECT().LoadProg(gomock.Any()).AnyTimes()
-	m.ebpf_maps.EXPECT().PinMap(gomock.Any(), gomock.Any()).AnyTimes()
-	m.ebpf_maps.EXPECT().GetMapFromPinPath(gomock.Any()).AnyTimes()
-	m.ebpf_progs.EXPECT().GetProgFromPinPath(gomock.Any()).AnyTimes()
-	m.ebpf_progs.EXPECT().GetBPFProgAssociatedMapsIDs(gomock.Any()).AnyTimes()
-
-	elfFile, err := elf.NewFile(f)
-	assert.NoError(t, err)
-	elfLoader := newElfLoader(elfFile, m.ebpf_maps, m.ebpf_progs, "test")
-	_, _, err = elfLoader.doLoadELF()
-	assert.NoError(t, err)
+			elfFile, err := elf.NewFile(f)
+			assert.NoError(t, err)
+			elfLoader := newElfLoader(elfFile, m.ebpf_maps, m.ebpf_progs, "test")
+			loadedProgs, loadedMaps, err := elfLoader.doLoadELF()
+			assert.NoError(t, err)
+			assert.Equal(t, tt.wantProg, len(loadedProgs))
+			assert.Equal(t, tt.wantMap, len(loadedMaps))
+		})
+	}
 }
 
 func TestParseSection(t *testing.T) {
@@ -409,4 +404,277 @@ func TestParseMap(t *testing.T) {
 		})
 	}
 
+}
+
+func TestParseProg(t *testing.T) {
+	progtests := []struct {
+		name           string
+		elfFileName    string
+		want           int
+		invalidate     bool
+		invalidateRelo bool
+		wantErr        error
+	}{
+		{
+			name:        "Missing prog section",
+			elfFileName: "../../test-data/test.map.bpf.elf",
+			want:        0,
+			wantErr:     nil,
+		},
+		{
+			name:        "Test prog data",
+			elfFileName: "../../test-data/tc.ingress.bpf.elf",
+			want:        3,
+			wantErr:     nil,
+		},
+		{
+			name:        "Missing prog data",
+			elfFileName: "../../test-data/tc.ingress.bpf.elf",
+			invalidate:  true,
+			wantErr:     errors.New("missing data in prog section"),
+		},
+		{
+			name:           "Missing relo data",
+			elfFileName:    "../../test-data/tc.ingress.bpf.elf",
+			invalidateRelo: true,
+			wantErr:        errors.New("failed to apply relocation: unable to parse relocation entries...."),
+		},
+	}
+
+	for _, tt := range progtests {
+		t.Run(tt.name, func(t *testing.T) {
+
+			m := setup(t, tt.elfFileName)
+			defer m.ctrl.Finish()
+			f, _ := os.Open(m.path)
+			defer f.Close()
+
+			elfFile, err := elf.NewFile(f)
+			assert.NoError(t, err)
+			elfLoader := newElfLoader(elfFile, m.ebpf_maps, m.ebpf_progs, "test")
+
+			err = elfLoader.parseSection()
+			assert.NoError(t, err)
+
+			mapData, err := elfLoader.parseMap()
+			assert.NoError(t, err)
+
+			m.ebpf_maps.EXPECT().CreateBPFMap(gomock.Any()).AnyTimes()
+			m.ebpf_maps.EXPECT().PinMap(gomock.Any(), gomock.Any()).AnyTimes()
+			m.ebpf_maps.EXPECT().GetMapFromPinPath(gomock.Any()).AnyTimes()
+
+			loadedMapData, err := elfLoader.loadMap(mapData)
+			assert.NoError(t, err)
+
+			if tt.invalidate {
+				for progIndex, progEntry := range elfLoader.progSectionMap {
+					var dummySection elf.Section = elf.Section{}
+					copiedprogSection := *(progEntry.progSection)
+					copiedprogSection.SectionHeader = dummySection.SectionHeader
+					progEntry.progSection = &copiedprogSection
+					elfLoader.progSectionMap[progIndex] = progEntry
+				}
+			}
+
+			if tt.invalidateRelo {
+				for progIndex, reloSection := range elfLoader.reloSectionMap {
+					var dummySection elf.Section = elf.Section{}
+					copiedreloSection := *(reloSection)
+					copiedreloSection.SectionHeader = dummySection.SectionHeader
+					reloSection = &copiedreloSection
+					elfLoader.reloSectionMap[progIndex] = reloSection
+				}
+			}
+
+			parsedProgData, err := elfLoader.parseProg(loadedMapData)
+
+			if tt.wantErr != nil {
+				assert.EqualError(t, err, tt.wantErr.Error())
+			} else {
+				progCount := len(parsedProgData)
+				assert.Equal(t, tt.want, progCount)
+			}
+		})
+	}
+
+}
+
+func TestRecovery(t *testing.T) {
+
+	utils.Mount_bpf_fs()
+	defer utils.Unmount_bpf_fs()
+
+	progtests := []struct {
+		name          string
+		elfFileName   string
+		wantMap       int
+		wantProg      int
+		recoverGlobal bool
+		forceUnMount  bool
+		wantErr       error
+	}{
+		{
+			name:          "Recover Global maps",
+			elfFileName:   "../../test-data/test.map.bpf.elf",
+			wantMap:       1,
+			recoverGlobal: true,
+			wantErr:       nil,
+		},
+		{
+			name:        "Recover BPF data",
+			elfFileName: "../../test-data/recoverydata.bpf.elf",
+			wantProg:    3,
+			wantErr:     nil,
+		},
+		{
+			name:         "Missing BPF mount",
+			elfFileName:  "../../test-data/recoverydata.bpf.elf",
+			wantProg:     0,
+			forceUnMount: true,
+			wantErr:      errors.New("error checking BPF FS, please make sure it is mounted"),
+		},
+	}
+
+	for _, tt := range progtests {
+		t.Run(tt.name, func(t *testing.T) {
+
+			m := setup(t, tt.elfFileName)
+			defer m.ctrl.Finish()
+
+			bpfSDKclient := New()
+
+			if tt.recoverGlobal {
+				_, _, err := bpfSDKclient.LoadBpfFile(m.path, "global")
+				if err != nil {
+					assert.NoError(t, err)
+				}
+				recoveredMaps, err := bpfSDKclient.RecoverGlobalMaps()
+				if tt.wantErr != nil {
+					assert.EqualError(t, err, tt.wantErr.Error())
+				} else {
+					assert.Equal(t, tt.wantMap, len(recoveredMaps))
+				}
+			} else {
+				_, _, err := bpfSDKclient.LoadBpfFile(m.path, "test")
+				if err != nil {
+					assert.NoError(t, err)
+				}
+
+				if tt.forceUnMount {
+					utils.Unmount_bpf_fs()
+				}
+				recoveredData, err := bpfSDKclient.RecoverAllBpfProgramsAndMaps()
+				if tt.wantErr != nil {
+					assert.EqualError(t, err, tt.wantErr.Error())
+				} else {
+					assert.Equal(t, tt.wantProg, len(recoveredData))
+				}
+			}
+		})
+	}
+}
+
+func TestGetMapNameFromBPFPinPath(t *testing.T) {
+	type args struct {
+		pinPath string
+	}
+
+	tests := []struct {
+		name string
+		args args
+		want [2]string
+	}{
+		{
+			name: "Ingress Map Pinpath",
+			args: args{
+				pinPath: "/sys/fs/bpf/globals/aws/maps/hello-udp-748dc8d996-default_ingress_map",
+			},
+			want: [2]string{"ingress_map", "hello-udp-748dc8d996-default"},
+		},
+		{
+			name: "Egress Map Pinpath",
+			args: args{
+				pinPath: "/sys/fs/bpf/globals/aws/maps/hello-udp-748dc8d996-default_egress_map",
+			},
+			want: [2]string{"egress_map", "hello-udp-748dc8d996-default"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got1, got2 := GetMapNameFromBPFPinPath(tt.args.pinPath)
+			assert.Equal(t, tt.want[0], got1)
+			assert.Equal(t, tt.want[1], got2)
+		})
+	}
+}
+
+func TestMapGlobal(t *testing.T) {
+	type args struct {
+		pinPath string
+	}
+
+	tests := []struct {
+		name string
+		args args
+		want bool
+	}{
+		{
+			name: "Ingress Map",
+			args: args{
+				pinPath: "/sys/fs/bpf/globals/aws/maps/hello-udp-748dc8d996-default_ingress_map",
+			},
+			want: false,
+		},
+		{
+			name: "Egress Map",
+			args: args{
+				pinPath: "/sys/fs/bpf/globals/aws/maps/hello-udp-748dc8d996-default_egress_map",
+			},
+			want: false,
+		},
+		{
+			name: "Global",
+			args: args{
+				pinPath: "/sys/fs/bpf/globals/aws/maps/test_global",
+			},
+			want: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := IsMapGlobal(tt.args.pinPath)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestProgType(t *testing.T) {
+
+	tests := []struct {
+		name     string
+		progType string
+		want     bool
+	}{
+		{
+			name:     "XDP",
+			progType: "xdp",
+			want:     true,
+		},
+		{
+			name:     "TC",
+			progType: "tc_cls",
+			want:     true,
+		},
+		{
+			name:     "Invalid prod",
+			progType: "tcc_cls",
+			want:     false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := isProgTypeSupported(tt.progType)
+			assert.Equal(t, tt.want, got)
+		})
+	}
 }

@@ -503,6 +503,11 @@ func (e *elfLoader) parseProg(loadedMaps map[string]ebpf_maps.BpfMap) (map[strin
 			return nil, fmt.Errorf("failed to get progEntry Data")
 		}
 
+		if len(data) == 0 {
+			log.Infof("Missing data in prog Section")
+			return nil, fmt.Errorf("missing data in prog section")
+		}
+
 		var linkedMaps map[int]string
 		//Apply relocation
 		if e.reloSectionMap[progIndex] == nil {
@@ -731,8 +736,8 @@ func (b *bpfSDKClient) RecoverGlobalMaps() (map[string]ebpf_maps.BpfMap, error) 
 			return nil, fmt.Errorf("error walking the bpfdirectory %v", err)
 		}
 	} else {
-		log.Infof("error checking BPF FS, might not be mounted %v", err)
-		return nil, fmt.Errorf("error checking BPF FS might not be mounted %v", err)
+		log.Infof("error checking BPF FS, please make sure it is mounted %v", err)
+		return nil, fmt.Errorf("error checking BPF FS, please make sure it is mounted")
 	}
 	return loadedGlobalMaps, nil
 }
@@ -904,8 +909,8 @@ func (b *bpfSDKClient) RecoverAllBpfProgramsAndMaps() (map[string]BpfData, error
 			}
 		}
 	} else {
-		log.Infof("error checking BPF FS, might not be mounted %v", err)
-		return nil, fmt.Errorf("error checking BPF FS might not be mounted %v", err)
+		log.Infof("error checking BPF FS, please make sure it is mounted %v", err)
+		return nil, fmt.Errorf("error checking BPF FS, please make sure it is mounted")
 	}
 	//Return DS here
 	return loadedPrograms, nil
