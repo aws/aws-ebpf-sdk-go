@@ -15,15 +15,14 @@
 package kprobe
 
 import (
-	"fmt"
 	"os"
-	"syscall"
 	"testing"
 
 	constdef "github.com/aws/aws-ebpf-sdk-go/pkg/constants"
 	"github.com/aws/aws-ebpf-sdk-go/pkg/elfparser"
 	mock_ebpf_maps "github.com/aws/aws-ebpf-sdk-go/pkg/maps/mocks"
 	mock_ebpf_progs "github.com/aws/aws-ebpf-sdk-go/pkg/progs/mocks"
+	"github.com/aws/aws-ebpf-sdk-go/pkg/utils"
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/assert"
 )
@@ -37,24 +36,6 @@ type testMocks struct {
 	ctrl       *gomock.Controller
 	ebpf_progs *mock_ebpf_progs.MockBpfProgAPIs
 	ebpf_maps  *mock_ebpf_maps.MockBpfMapAPIs
-}
-
-func mount_bpf_fs() error {
-	fmt.Println("Let's mount BPF FS")
-	err := syscall.Mount("bpf", "/sys/fs/bpf", "bpf", 0, "mode=0700")
-	if err != nil {
-		fmt.Println("error mounting bpffs")
-	}
-	return err
-}
-
-func unmount_bpf_fs() error {
-	fmt.Println("Let's unmount BPF FS")
-	err := syscall.Unmount("/sys/fs/bpf", 0)
-	if err != nil {
-		fmt.Println("error unmounting bpffs")
-	}
-	return err
 }
 
 func setup(t *testing.T, testPath string) *testMocks {
@@ -75,8 +56,8 @@ func TestTCKprobeAttachDetach(t *testing.T) {
 	m := setup(t, "../../test-data/test-kprobe.bpf.elf")
 	defer m.ctrl.Finish()
 
-	mount_bpf_fs()
-	defer unmount_bpf_fs()
+	utils.Mount_bpf_fs()
+	defer utils.Unmount_bpf_fs()
 
 	m.ebpf_maps.EXPECT().CreateBPFMap(gomock.Any()).AnyTimes()
 	m.ebpf_progs.EXPECT().LoadProg(gomock.Any()).AnyTimes()
@@ -114,8 +95,8 @@ func TestTCKretprobeAttachDetach(t *testing.T) {
 	m := setup(t, "../../test-data/test-kprobe.bpf.elf")
 	defer m.ctrl.Finish()
 
-	mount_bpf_fs()
-	defer unmount_bpf_fs()
+	utils.Mount_bpf_fs()
+	defer utils.Unmount_bpf_fs()
 
 	m.ebpf_maps.EXPECT().CreateBPFMap(gomock.Any()).AnyTimes()
 	m.ebpf_progs.EXPECT().LoadProg(gomock.Any()).AnyTimes()

@@ -239,14 +239,14 @@ func probeDetach(eventName string, perfFD int, kretProbe bool) error {
 	}
 	unix.Close(perfFD)
 
-	disableEvent := constdef.KPROBE_SYS_DEBUG + "/" + eventName + "/enable"
+	eventEnable := constdef.KPROBE_SYS_DEBUG + "/" + eventName + "/enable"
 	if kretProbe {
-		disableEvent = constdef.KRETPROBE_SYS_DEBUG + "/" + eventName + "/enable"
+		eventEnable = constdef.KRETPROBE_SYS_DEBUG + "/" + eventName + "/enable"
 	}
 
 	setEnable := []byte("0")
 
-	err := ioutil.WriteFile(disableEvent, setEnable, os.ModePerm)
+	err := ioutil.WriteFile(eventEnable, setEnable, os.ModePerm)
 	if err != nil {
 		return err
 	}
