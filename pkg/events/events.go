@@ -45,14 +45,12 @@ func New() Events {
 }
 
 type events struct {
-	RingBuffers          []*RingBuffer
-	PageSize             int
-	RingCnt              int
-	stopRingBufferChan   chan struct{}
-	updateRingBufferChan chan *RingBuffer
-	eventsStopChannel    chan struct{}
-	wg                   sync.WaitGroup
-	eventsDataChannel    chan []byte
+	RingBuffers       []*RingBuffer
+	PageSize          int
+	RingCnt           int
+	eventsStopChannel chan struct{}
+	wg                sync.WaitGroup
+	eventsDataChannel chan []byte
 
 	epoller *poller.EventPoller
 }
