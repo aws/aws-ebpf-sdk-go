@@ -30,15 +30,27 @@ import (
 
 var log = logger.Get()
 
-type Events struct {
-	RingBuffers          []*RingBuffer
-	PageSize             int
-	RingCnt              int
-	stopRingBufferChan   chan struct{}
-	updateRingBufferChan chan *RingBuffer
-	eventsStopChannel    chan struct{}
-	wg                   sync.WaitGroup
-	eventsDataChannel    chan []byte
+type Events interface {
+	InitRingBuffer(mapFDlist []int) (map[int]chan []byte, error)
+}
+
+var _ Events = &events{}
+
+func New() Events {
+	return &events{
+		PageSize: os.Getpagesize(),
+		RingCnt:  0,
+	}
+
+}
+
+type events struct {
+	RingBuffers       []*RingBuffer
+	PageSize          int
+	RingCnt           int
+	eventsStopChannel chan struct{}
+	wg                sync.WaitGroup
+	eventsDataChannel chan []byte
 
 	epoller *poller.EventPoller
 }
@@ -62,16 +74,11 @@ func isValidMapFDList(mapFDlist []int) bool {
 	return true
 }
 
-func InitRingBuffer(mapFDlist []int) (map[int]chan []byte, error) {
+func (ev *events) InitRingBuffer(mapFDlist []int) (map[int]chan []byte, error) {
 
 	// Validate mapFD
 	if !isValidMapFDList(mapFDlist) {
 		return nil, fmt.Errorf("mapFDs passed to InitRingBuffer is invalid")
-	}
-
-	ev := &Events{
-		PageSize: os.Getpagesize(),
-		RingCnt:  0,
 	}
 
 	epoll, err := poller.NewEventPoller()
@@ -89,9 +96,9 @@ func InitRingBuffer(mapFDlist []int) (map[int]chan []byte, error) {
 			return nil, fmt.Errorf("failed to map info")
 		}
 
-		eventsChan, err := ev.SetupRingBuffer(mapFD, mapInfo.MaxEntries)
+		eventsChan, err := ev.setupRingBuffer(mapFD, mapInfo.MaxEntries)
 		if err != nil {
-			ev.CleanupRingBuffer()
+			ev.cleanupRingBuffer()
 			return nil, fmt.Errorf("failed to add ring buffer: %s", err)
 		}
 
@@ -101,7 +108,7 @@ func InitRingBuffer(mapFDlist []int) (map[int]chan []byte, error) {
 	return ringBufferChanList, nil
 }
 
-func (ev *Events) SetupRingBuffer(mapFD int, maxEntries uint32) (chan []byte, error) {
+func (ev *events) setupRingBuffer(mapFD int, maxEntries uint32) (chan []byte, error) {
 	ringbuffer := &RingBuffer{
 		RingBufferMapFD: mapFD,
 		Mask:            uint64(maxEntries - 1),
@@ -148,7 +155,7 @@ func (ev *Events) SetupRingBuffer(mapFD int, maxEntries uint32) (chan []byte, er
 	return ev.eventsDataChannel, nil
 }
 
-func (ev *Events) CleanupRingBuffer() {
+func (ev *events) cleanupRingBuffer() {
 
 	for i := 0; i < ev.RingCnt; i++ {
 		_ = unix.Munmap(ev.RingBuffers[i].Producer)
@@ -165,21 +172,14 @@ func (ev *Events) CleanupRingBuffer() {
 	return
 }
 
-func (ev *Events) reconcileEventsDataChannel() {
-
-	pollerCh := ev.epoller.EpollStart()
-	defer func() {
-		ev.wg.Done()
-	}()
-
+func (ev *events) reconcileEventsDataChannelHandler(pollerCh <-chan int) {
 	for {
 		select {
 		case bufferPtr, ok := <-pollerCh:
-
 			if !ok {
 				return
 			}
-			ev.ReadRingBuffer(ev.RingBuffers[bufferPtr])
+			ev.readRingBuffer(ev.RingBuffers[bufferPtr])
 
 		case <-ev.eventsStopChannel:
 			return
@@ -187,8 +187,18 @@ func (ev *Events) reconcileEventsDataChannel() {
 	}
 }
 
+func (ev *events) reconcileEventsDataChannel() {
+
+	pollerCh := ev.epoller.EpollStart()
+	defer ev.wg.Done()
+
+	go ev.reconcileEventsDataChannelHandler(pollerCh)
+
+	<-ev.eventsStopChannel
+}
+
 // Similar to libbpf poll ring
-func (ev *Events) ReadRingBuffer(eventRing *RingBuffer) {
+func (ev *events) readRingBuffer(eventRing *RingBuffer) {
 	readDone := true
 	consPosition := eventRing.getConsumerPosition()
 	for !readDone {
@@ -196,7 +206,7 @@ func (ev *Events) ReadRingBuffer(eventRing *RingBuffer) {
 	}
 }
 
-func (ev *Events) parseBuffer(consumerPosition uint64, eventRing *RingBuffer) bool {
+func (ev *events) parseBuffer(consumerPosition uint64, eventRing *RingBuffer) bool {
 	readDone := true
 	producerPosition := eventRing.getProducerPosition()
 	for consumerPosition < producerPosition {

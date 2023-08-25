@@ -37,7 +37,6 @@ type BpfTc interface {
 	TCEgressAttach(interfaceName string, progFD int, funcName string) error
 	TCEgressDetach(interfaceName string) error
 	CleanupQdiscs(ingressCleanup bool, egressCleanup bool) error
-	mismatchedInterfacePrefix(interfaceName string) error
 }
 
 var _ BpfTc = &bpfTc{}
@@ -76,9 +75,9 @@ func enableQdisc(link netlink.Link) bool {
 
 }
 
-func (m *bpfTc) mismatchedInterfacePrefix(interfaceName string) error {
-	if !strings.HasPrefix(interfaceName, m.InterfacePrefix) {
-		log.Errorf("expected prefix - %s but got %s", m.InterfacePrefix, interfaceName)
+func mismatchedInterfacePrefix(interfaceName string, interfacePrefix string) error {
+	if !strings.HasPrefix(interfaceName, interfacePrefix) {
+		log.Errorf("expected prefix - %s but got %s", interfacePrefix, interfaceName)
 		return errors.New("Mismatched initialized prefix name and passed interface name")
 	}
 	return nil
@@ -86,7 +85,7 @@ func (m *bpfTc) mismatchedInterfacePrefix(interfaceName string) error {
 
 func (m *bpfTc) TCIngressAttach(interfaceName string, progFD int, funcName string) error {
 
-	if err := m.mismatchedInterfacePrefix(interfaceName); err != nil {
+	if err := mismatchedInterfacePrefix(interfaceName, m.InterfacePrefix); err != nil {
 		return err
 	}
 
@@ -138,7 +137,7 @@ func (m *bpfTc) TCIngressAttach(interfaceName string, progFD int, funcName strin
 
 func (m *bpfTc) TCIngressDetach(interfaceName string) error {
 
-	if err := m.mismatchedInterfacePrefix(interfaceName); err != nil {
+	if err := mismatchedInterfacePrefix(interfaceName, m.InterfacePrefix); err != nil {
 		return err
 	}
 
@@ -174,7 +173,7 @@ func (m *bpfTc) TCIngressDetach(interfaceName string) error {
 
 func (m *bpfTc) TCEgressAttach(interfaceName string, progFD int, funcName string) error {
 
-	if err := m.mismatchedInterfacePrefix(interfaceName); err != nil {
+	if err := mismatchedInterfacePrefix(interfaceName, m.InterfacePrefix); err != nil {
 		return err
 	}
 
@@ -226,7 +225,7 @@ func (m *bpfTc) TCEgressAttach(interfaceName string, progFD int, funcName string
 
 func (m *bpfTc) TCEgressDetach(interfaceName string) error {
 
-	if err := m.mismatchedInterfacePrefix(interfaceName); err != nil {
+	if err := mismatchedInterfacePrefix(interfaceName, m.InterfacePrefix); err != nil {
 		return err
 	}
 
