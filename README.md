@@ -96,6 +96,11 @@ struct bpf_map_def_pvt {
 	__u32 inner_map_fd;
 };
 ```
+
+## How to debug SDK issues?
+
+SDK logs are located here `/var/log/aws-routed-eni/ebpf-sdk.log`.
+
 ## How to run unit-test
 
 Run `sudo make unit-test`
