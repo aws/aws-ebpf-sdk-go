@@ -31,14 +31,12 @@ import (
 var log = logger.Get()
 
 type Events struct {
-	RingBuffers          []*RingBuffer
-	PageSize             int
-	RingCnt              int
-	stopRingBufferChan   chan struct{}
-	updateRingBufferChan chan *RingBuffer
-	eventsStopChannel    chan struct{}
-	wg                   sync.WaitGroup
-	eventsDataChannel    chan []byte
+	RingBuffers       []*RingBuffer
+	PageSize          int
+	RingCnt           int
+	eventsStopChannel chan struct{}
+	wg                sync.WaitGroup
+	eventsDataChannel chan []byte
 
 	epoller *poller.EventPoller
 }
@@ -165,13 +163,7 @@ func (ev *Events) CleanupRingBuffer() {
 	return
 }
 
-func (ev *Events) reconcileEventsDataChannel() {
-
-	pollerCh := ev.epoller.EpollStart()
-	defer func() {
-		ev.wg.Done()
-	}()
-
+func (ev *Events) reconcileEventsDataChannelHandler(pollerCh <-chan int) {
 	for {
 		select {
 		case bufferPtr, ok := <-pollerCh:
@@ -185,6 +177,16 @@ func (ev *Events) reconcileEventsDataChannel() {
 			return
 		}
 	}
+}
+
+func (ev *Events) reconcileEventsDataChannel() {
+
+	pollerCh := ev.epoller.EpollStart()
+	defer ev.wg.Done()
+
+	go ev.reconcileEventsDataChannelHandler(pollerCh)
+
+	<-ev.eventsStopChannel
 }
 
 // Similar to libbpf poll ring
