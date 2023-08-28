@@ -2,14 +2,19 @@
 
 Golang based SDK for kernel eBPF operations i.e, load/attach/detach eBPF programs and create/delete/update maps. SDK relies on Unix bpf() system calls.
 
-SDK currently supports below eBPF program types -
+SDK currently supports -
 
-1. Traffic Classifiers
-2. XDP
-3. Kprobes/Kretprobes
-4. Tracepoint probes
+1. eBPF program types -
+   a. Traffic Classifiers
+   b. XDP
+   c. Kprobes/Kretprobes
+   d. Tracepoint probes
+2. Ring buffer (would need kernel 5.10+)
 
-Ring buffer support is available and that would need kernel 5.10+. Map in Map support and perf buffer support is not yet available.
+SDK currently do not support -
+
+1. Map in Map
+2. Perf buffer
 
 Contributions welcome!
 
