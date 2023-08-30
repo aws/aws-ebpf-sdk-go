@@ -97,7 +97,8 @@ func main() {
 }
 
 func TestLoadProg() error {
-	progInfo, _, err := goelf.LoadBpfFile("c/test.bpf.elf", "test")
+	gosdkClient := goelf.New()
+	progInfo, _, err := gosdkClient.LoadBpfFile("c/test.bpf.elf", "test")
 	if err != nil {
 		fmt.Println("Load BPF failed", "err:", err)
 		return err
@@ -110,7 +111,8 @@ func TestLoadProg() error {
 }
 
 func TestLoadMapWithNoProg() error {
-	_, loadedMap, err := goelf.LoadBpfFile("c/test-map.bpf.elf", "test")
+	gosdkClient := goelf.New()
+	_, loadedMap, err := gosdkClient.LoadBpfFile("c/test-map.bpf.elf", "test")
 	if err != nil {
 		fmt.Println("Load BPF failed", "err:", err)
 		return err
@@ -124,7 +126,8 @@ func TestLoadMapWithNoProg() error {
 }
 
 func TestMapOperations() error {
-	_, loadedMap, err := goelf.LoadBpfFile("c/test-map.bpf.elf", "operations")
+	gosdkClient := goelf.New()
+	_, loadedMap, err := gosdkClient.LoadBpfFile("c/test-map.bpf.elf", "operations")
 	if err != nil {
 		fmt.Println("Load BPF failed", "err:", err)
 		return err
@@ -260,7 +263,8 @@ func TestMapOperations() error {
 }
 
 func TestLoadTCfilter() error {
-	progInfo, _, err := goelf.LoadBpfFile("c/test.bpf.elf", "test")
+	gosdkClient := goelf.New()
+	progInfo, _, err := gosdkClient.LoadBpfFile("c/test.bpf.elf", "test")
 	if err != nil {
 		fmt.Println("Load BPF failed", "err:", err)
 		return err
@@ -273,23 +277,25 @@ func TestLoadTCfilter() error {
 	tcProg := progInfo["/sys/fs/bpf/globals/aws/programs/test_handle_ingress"].Program
 	progFD := tcProg.ProgFD
 
+	gosdkTcClient := ebpf_tc.New("lo")
+
 	fmt.Println("Try Attach ingress probe")
-	err = ebpf_tc.TCIngressAttach("lo", int(progFD), "ingress_test")
+	err = gosdkTcClient.TCIngressAttach("lo", int(progFD), "ingress_test")
 	if err != nil {
 		fmt.Println("Failed attaching ingress probe")
 	}
 	fmt.Println("Try Attach egress probe")
-	err = ebpf_tc.TCEgressAttach("lo", int(progFD), "egress_test")
+	err = gosdkTcClient.TCEgressAttach("lo", int(progFD), "egress_test")
 	if err != nil {
 		fmt.Println("Failed attaching ingress probe")
 	}
 	fmt.Println("Try Detach ingress probe")
-	err = ebpf_tc.TCIngressDetach("lo")
+	err = gosdkTcClient.TCIngressDetach("lo")
 	if err != nil {
 		fmt.Println("Failed attaching ingress probe")
 	}
 	fmt.Println("Try Detach egress probe")
-	err = ebpf_tc.TCEgressDetach("lo")
+	err = gosdkTcClient.TCEgressDetach("lo")
 	if err != nil {
 		fmt.Println("Failed attaching ingress probe")
 	}

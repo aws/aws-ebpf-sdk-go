@@ -118,7 +118,7 @@ Go to -
 
 ```
 cd test/
-make run-test
+sudo make run-test
 ```
 
 ## Security
