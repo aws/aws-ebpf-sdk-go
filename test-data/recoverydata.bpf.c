@@ -81,7 +81,7 @@ int conn_del(struct pt_regs *ctx) {
   	struct nf_conn new_ct = {};
   	bpf_probe_read(&new_ct, sizeof(new_ct), ct);
   	struct conntrack_key flow_key = {};
-  	memset(&flow_key, 0, sizeof(flow_key));
+  	__builtin_memset(&flow_key, 0, sizeof(flow_key));
 
   	struct nf_conntrack_tuple_hash tuplehash[IP_CT_DIR_MAX];
   	bpf_probe_read(&tuplehash, sizeof(tuplehash), &new_ct.tuplehash);
