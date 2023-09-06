@@ -49,6 +49,7 @@ func (e *EventPoller) AddEpollCtl(mapFD, eventFD int) error {
 		return fmt.Errorf("failed to Epoll event: %s", err)
 	}
 	e.epollEvent = append(e.epollEvent, epollEvent)
+	e.bufferCnt++
 	return nil
 }
 
