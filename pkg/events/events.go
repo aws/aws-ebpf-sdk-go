@@ -34,6 +34,7 @@ type Events struct {
 	RingBuffers       []*RingBuffer
 	PageSize          int
 	RingCnt           int
+	EventFdCnt        int
 	eventsStopChannel chan struct{}
 	wg                sync.WaitGroup
 	eventsDataChannel chan []byte
@@ -129,13 +130,14 @@ func (ev *Events) SetupRingBuffer(mapFD int, maxEntries uint32) (chan []byte, er
 	ringbuffer.Data = unsafe.Pointer(uintptr(unsafe.Pointer(&producer[0])) + uintptr(ev.PageSize))
 
 	ev.RingBuffers = append(ev.RingBuffers, ringbuffer)
-	ev.RingCnt++
 
-	err = ev.epoller.AddEpollCtl(mapFD, ev.RingCnt)
+	err = ev.epoller.AddEpollCtl(mapFD, ev.EventFdCnt)
 	if err != nil {
 		unix.Munmap(producer)
 		return nil, fmt.Errorf("failed to Epoll event: %s", err)
 	}
+	ev.RingCnt++
+	ev.EventFdCnt++
 
 	//Start channels read
 	ev.eventsStopChannel = make(chan struct{})
@@ -189,40 +191,43 @@ func (ev *Events) reconcileEventsDataChannel() {
 	<-ev.eventsStopChannel
 }
 
-// Similar to libbpf poll ring
+// Similar to libbpf poll and process ring
+// Ref: https://github.com/torvalds/linux/blob/744a759492b5c57ff24a6e8aabe47b17ad8ee964/tools/lib/bpf/ringbuf.c#L227
 func (ev *Events) ReadRingBuffer(eventRing *RingBuffer) {
-	readDone := true
 	consPosition := eventRing.getConsumerPosition()
-	for !readDone {
-		readDone = ev.parseBuffer(consPosition, eventRing)
-	}
+	ev.parseBuffer(consPosition, eventRing)
 }
 
-func (ev *Events) parseBuffer(consumerPosition uint64, eventRing *RingBuffer) bool {
-	readDone := true
-	producerPosition := eventRing.getProducerPosition()
-	for consumerPosition < producerPosition {
+func (ev *Events) parseBuffer(consumerPosition uint64, eventRing *RingBuffer) {
+	var readDone bool
+	for {
+		readDone = true
+		producerPosition := eventRing.getProducerPosition()
+		for consumerPosition < producerPosition {
 
-		// Get the header - Data points to the DataPage which will be offset by consumerPosition
-		ringdata := eventRing.ParseRingData(consumerPosition)
+			// Get the header - Data points to the DataPage which will be offset by consumerPosition
+			ringdata := eventRing.ParseRingData(consumerPosition)
 
-		// Check if busy then skip, Might not be committed yet
-		// There are 2 steps -> reserve and then commit/discard
-		if ringdata.BusyRecord {
-			readDone = true
+			// Check if busy then skip, Might not be committed yet
+			// There are 2 steps -> reserve and then commit/discard
+			if ringdata.BusyRecord {
+				readDone = true
+				break
+			}
+
+			readDone = false
+
+			// Update the position to the next record irrespective of discard or commit of data
+			consumerPosition += uint64(ringdata.RecordLen)
+
+			//Pick the data only if committed
+			if !ringdata.DiscardRecord {
+				ev.eventsDataChannel <- ringdata.parseSample()
+			}
+			eventRing.setConsumerPosition(consumerPosition)
+		}
+		if readDone {
 			break
 		}
-
-		readDone = false
-
-		// Update the position to the next record irrespective of discard or commit of data
-		consumerPosition += uint64(ringdata.RecordLen)
-
-		//Pick the data only if committed
-		if !ringdata.DiscardRecord {
-			ev.eventsDataChannel <- ringdata.parseSample()
-		}
-		eventRing.setConsumerPosition(consumerPosition)
 	}
-	return readDone
 }
