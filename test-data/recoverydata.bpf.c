@@ -96,7 +96,7 @@ int conn_del(struct pt_regs *ctx) {
 }
 
 SEC("tracepoint/sched/sched_process_fork")
-int sched_process_fork(struct sched_process_fork_t *ctx) {
+int sched_process_fork(void *ctx) {
     return 0;
 }
 
