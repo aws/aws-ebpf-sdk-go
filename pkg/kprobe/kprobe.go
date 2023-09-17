@@ -87,6 +87,7 @@ func (k *bpfKprobe) KprobeAttach() error {
 		log.Errorf("error opening kprobe_events file: %v", err)
 		return err
 	}
+	defer file.Close()
 
 	eventString := fmt.Sprintf("p:kprobes/%s %s", k.eventName, k.funcName)
 	_, err = file.WriteString(eventString)
@@ -173,6 +174,7 @@ func (k *bpfKprobe) KretprobeAttach() error {
 		log.Errorf("error opening kprobe_events file: %v", err)
 		return err
 	}
+	defer file.Close()
 
 	eventString := fmt.Sprintf("r4096:kretprobes/%s %s", k.eventName, k.funcName)
 	_, err = file.WriteString(eventString)
