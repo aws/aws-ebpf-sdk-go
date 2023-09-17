@@ -16,6 +16,7 @@ package kprobe
 
 import (
 	"os"
+	"regexp"
 	"testing"
 
 	constdef "github.com/aws/aws-ebpf-sdk-go/pkg/constants"
@@ -75,9 +76,8 @@ func TestTCKprobeAttachDetach(t *testing.T) {
 
 	progFD := progInfo[pinPath].Program.ProgFD
 	funcName := "oom_kill_process"
-	eventName := funcName + "__goebpf"
 
-	kprobeClient := New(progFD, eventName, funcName)
+	kprobeClient := New(progFD, funcName)
 	if err := kprobeClient.KprobeAttach(); err != nil {
 		assert.NoError(t, err)
 	}
@@ -114,9 +114,8 @@ func TestTCKretprobeAttachDetach(t *testing.T) {
 
 	progFD := progInfo[pinPath].Program.ProgFD
 	funcName := "oom_kill_process"
-	eventName := funcName + "__goebpf"
 
-	kprobeClient := New(progFD, eventName, funcName)
+	kprobeClient := New(progFD, funcName)
 	if err := kprobeClient.KretprobeAttach(); err != nil {
 		assert.NoError(t, err)
 	}
@@ -124,4 +123,15 @@ func TestTCKretprobeAttachDetach(t *testing.T) {
 	if err := kprobeClient.KretprobeDetach(); err != nil {
 		assert.NoError(t, err)
 	}
+}
+
+func TestKprobeGroupName(t *testing.T) {
+	grp, err := genRandomGroup("test", 10)
+	if err != nil {
+		assert.NoError(t, err)
+	}
+	assert.Regexp(t, regexp.MustCompile("test_[a-zA-Z1-9]{10}"), grp)
+
+	_, err = genRandomGroup("1234", 10)
+	assert.Error(t, err)
 }

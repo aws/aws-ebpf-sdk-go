@@ -15,9 +15,11 @@
 package kprobe
 
 import (
+	"crypto/rand"
 	"fmt"
 	"io/ioutil"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"syscall"
@@ -28,6 +30,19 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+// for kernel limitations
+const maxEventNameLen = 64
+
+// used for rand string generation rand string
+const charSet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+
+/*
+ * Trace event name must comply with the following naming convension:
+ *   1. non-empty
+ *   2. must not be start with number
+ *   3. all characters must be alphanumeric or underscore
+ */
+var vaildEventNamePat = regexp.MustCompile("^[a-zA-Z_][0-9a-zA-Z_]*$")
 var log = logger.Get()
 
 type BpfKprobe interface {
@@ -46,11 +61,10 @@ type bpfKprobe struct {
 	perfFD    int
 }
 
-func New(fd int, eName, fName string) BpfKprobe {
+func New(fd int, fName string) BpfKprobe {
 	return &bpfKprobe{
-		progFD:    fd,
-		eventName: eName,
-		funcName:  fName,
+		progFD:   fd,
+		funcName: fName,
 	}
 
 }
@@ -76,10 +90,15 @@ func (k *bpfKprobe) KprobeAttach() error {
 
 	}
 
-	// if event is nil, we pick funcName
-	if len(k.eventName) == 0 {
-		k.eventName = k.funcName
+	if !vaildEventNamePat.MatchString(k.funcName) {
+		return fmt.Errorf("symbol %s must be alphanumeric or underscore", k.funcName)
 	}
+
+	eName, err := genRandomGroup("__goebpf", 8)
+	if err != nil {
+		return fmt.Errorf("generate Event name: %s", err)
+	}
+	k.eventName = eName
 
 	// Register the Kprobe event
 	file, err := os.OpenFile(constdef.KPROBE_SYS_EVENTS, os.O_WRONLY|os.O_APPEND, 0)
@@ -92,6 +111,7 @@ func (k *bpfKprobe) KprobeAttach() error {
 	eventString := fmt.Sprintf("p:kprobes/%s %s", k.eventName, k.funcName)
 	_, err = file.WriteString(eventString)
 	if err != nil {
+		fmt.Printf("writing writing!!! %s\n", err)
 		log.Errorf("error writing to kprobe_events file: %v", err)
 		return err
 	}
@@ -282,4 +302,32 @@ func (k *bpfKprobe) KprobeDetach() error {
 func (k *bpfKprobe) KretprobeDetach() error {
 	log.Infof("Calling Kretprobe Detach on %s", k.eventName)
 	return probeDetach(k.eventName, k.perfFD, true)
+}
+
+// genRandomGroup() generates a string for use as a tracefs group name
+// Returns an error if the output doesn't comply with the following rule:
+//  1. The naming convention
+//  2. the length of the group name must be 63 characters or less
+func genRandomGroup(prefix string, n int) (string, error) {
+	if !vaildEventNamePat.MatchString(prefix) {
+		return "", fmt.Errorf("prefix: %s must be start with alphanumeric or underscore", prefix)
+	}
+
+	buff := make([]byte, n)
+	if _, err := rand.Read(buff); err != nil {
+		return "", fmt.Errorf("failed to read rand bytes: %s", err)
+	}
+
+	str := make([]byte, n)
+	for _, v := range buff {
+		c := charSet[int(v)%len(charSet)]
+		str = append(str, c)
+	}
+
+	grp := fmt.Sprintf("%s_%s", prefix, string(str))
+	if len(grp) > maxEventNameLen-1 {
+		return "", fmt.Errorf("group name: %s must be 63 chars or less", grp)
+	}
+
+	return grp, nil
 }
