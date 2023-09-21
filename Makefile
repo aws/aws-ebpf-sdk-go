@@ -4,6 +4,7 @@ export GOPROXY = direct
 
 CURDIR       := $(abspath .)
 TESTDATADIR  := $(CURDIR)/test-data
+ELFPARSERDIR := $(CURDIR)/pkg/elfparser
 BPFTOOL      := bpftool
 CLANG        := clang
 LOGFILE_PATH ?= stdout
@@ -48,7 +49,8 @@ TARGETS := \
 		  $(TESTDATADIR)/recoverydata \
 		  $(TESTDATADIR)/test-kprobe \
 		  $(TESTDATADIR)/xdp \
-		  $(TESTDATADIR)/ring_buffer
+		  $(TESTDATADIR)/ring_buffer \
+		  $(ELFPARSERDIR)/test-data/test
 
 %.bpf.elf: %.bpf.c
 	$(CLANG) $(CLANG_INCLUDE) $(BPF_CFLAGS) -c $< -o $@
@@ -74,3 +76,4 @@ unit-test:    ## Run unit tests
 clean:
 	-@rm -f $(TESTDATADIR)/vmlinux.h
 	-@rm -f $(TESTDATADIR)/*.elf
+	-@rm -f $(ELFPARSERDIR)/test-data/*.elf

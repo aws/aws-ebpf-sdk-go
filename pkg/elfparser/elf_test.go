@@ -15,7 +15,9 @@
 package elfparser
 
 import (
+	"bytes"
 	"debug/elf"
+	_ "embed"
 	"errors"
 	"os"
 	"sort"
@@ -667,4 +669,18 @@ func TestProgType(t *testing.T) {
 			assert.Equal(t, tt.want, got)
 		})
 	}
+}
+
+//go:embed test-data/test.bpf.elf
+var elfBytes []byte
+
+func TestLoadBpfFromEmbeddedElf(t *testing.T) {
+	if os.Getuid() != 0 {
+		t.Skip("Test requires root privileges.")
+	}
+
+	bpfSDKclient := New()
+	r := bytes.NewReader(elfBytes)
+	_, _, err := bpfSDKclient.LoadBpfFromReader(r, "")
+	assert.NoError(t, err)
 }

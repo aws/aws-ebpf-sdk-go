@@ -50,6 +50,7 @@ var sdkCache = cache.Get()
 type BpfSDKClient interface {
 	IncreaseRlimit() error
 	LoadBpfFile(path, customizedPinPath string) (map[string]BpfData, map[string]ebpf_maps.BpfMap, error)
+	LoadBpfFromReader(r io.ReaderAt, customizedPinPath string) (map[string]BpfData, map[string]ebpf_maps.BpfMap, error)
 	RecoverGlobalMaps() (map[string]ebpf_maps.BpfMap, error)
 	RecoverAllBpfProgramsAndMaps() (map[string]BpfData, error)
 }
@@ -122,6 +123,26 @@ func newElfLoader(elfFile *elf.File, bpfmapapi ebpf_maps.BpfMapAPIs, bpfprogapi 
 	return elfloader
 }
 
+// LoadBpfFromReader loads ELF file from io.ReaderAt and parses an ELF file into BPF objects
+func (b *bpfSDKClient) LoadBpfFromReader(r io.ReaderAt, customizedPinPath string) (
+	map[string]BpfData,
+	map[string]ebpf_maps.BpfMap,
+	error,
+) {
+	elfFile, err := elf.NewFile(r)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	elfLoader := newElfLoader(elfFile, b.mapApi, b.progApi, customizedPinPath)
+	bpfLoadedProg, bpfLoadedMaps, err := elfLoader.doLoadELF()
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return bpfLoadedProg, bpfLoadedMaps, nil
+}
+
 func (b *bpfSDKClient) LoadBpfFile(path, customizedPinPath string) (map[string]BpfData, map[string]ebpf_maps.BpfMap, error) {
 	bpfFile, err := os.Open(path)
 	if err != nil {
@@ -130,18 +151,7 @@ func (b *bpfSDKClient) LoadBpfFile(path, customizedPinPath string) (map[string]B
 	}
 	defer bpfFile.Close()
 
-	elfFile, err := elf.NewFile(bpfFile)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	elfLoader := newElfLoader(elfFile, b.mapApi, b.progApi, customizedPinPath)
-
-	bpfLoadedProg, bpfLoadedMaps, err := elfLoader.doLoadELF()
-	if err != nil {
-		return nil, nil, err
-	}
-	return bpfLoadedProg, bpfLoadedMaps, nil
+	return b.LoadBpfFromReader(bpfFile, customizedPinPath)
 }
 
 func (e *elfLoader) loadMap(parsedMapData []ebpf_maps.CreateEBPFMapInput) (map[string]ebpf_maps.BpfMap, error) {
