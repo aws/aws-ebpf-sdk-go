@@ -5,7 +5,6 @@
 
 #define BPF_F_NO_PREALLOC 1
 #define PIN_GLOBAL_NS           2
-#define BPF_MAP_TYPE_RINGBUF 27
 
 struct bpf_map_def_pvt {
 	__u32 type;
@@ -40,16 +39,6 @@ struct conntrack_value {
    __u8 val[4];
 };
 
-struct data_t {
-    __u32  src_ip;
-    __u32  src_port;
-    __u32  dest_ip;
-    __u32  dest_port;
-    __u32  protocol;
-    __u32  verdict;
-};
-
-
 struct bpf_map_def_pvt SEC("maps") ingress_map = {
     .type = BPF_MAP_TYPE_LPM_TRIE,
     .key_size =sizeof(struct lpm_trie_key),
@@ -67,11 +56,6 @@ struct bpf_map_def_pvt SEC("maps") aws_conntrack_map = {
     .pinning = PIN_GLOBAL_NS,
 };
 
-struct bpf_map_def_pvt SEC("maps") policy_events = {
-    .type = BPF_MAP_TYPE_RINGBUF,
-    .max_entries = 256 * 1024,
-    .pinning = PIN_GLOBAL_NS,
-};
 
 SEC("tc_cls")
 int handle_ingress(struct __sk_buff *skb)
@@ -108,13 +92,6 @@ int conn_del(struct pt_regs *ctx) {
   	bpf_probe_read(&flow_key.dest_port, sizeof(flow_key.dest_port), &tuplehash[IP_CT_DIR_ORIGINAL].tuple.dst.u.all);
   	bpf_probe_read(&flow_key.protocol, sizeof(flow_key.protocol), &tuplehash[IP_CT_DIR_ORIGINAL].tuple.dst.protonum);
 
-  	struct data_t evt = {};
-        evt.src_ip = flow_key.src_ip;
-        evt.src_port = flow_key.src_port;
-        evt.dest_ip = flow_key.dest_ip;
-        evt.dest_port = flow_key.dest_port;
-        evt.protocol = flow_key.protocol;
-	bpf_ringbuf_output(&policy_events, &evt, sizeof(evt), 2);
 	return 0;
 }
 

@@ -46,7 +46,7 @@ func (e *EventPoller) AddEpollCtl(mapFD, eventFD int) error {
 
 	err := unix.EpollCtl(e.epollFd, unix.EPOLL_CTL_ADD, mapFD, &epollEvent)
 	if err != nil {
-		return fmt.Errorf("Failed to Epoll event: %s", err)
+		return fmt.Errorf("failed to Epoll event: %s", err)
 	}
 	e.epollEvent = append(e.epollEvent, epollEvent)
 	e.bufferCnt++
@@ -54,10 +54,8 @@ func (e *EventPoller) AddEpollCtl(mapFD, eventFD int) error {
 }
 
 func (e *EventPoller) EpollStart() <-chan int {
-
 	e.wg.Add(1)
 	go e.eventsPoller()
-
 	return e.fdEventPollerChan
 }
 
@@ -71,7 +69,6 @@ func (e *EventPoller) getEventFDs(totalEvents int) {
 		}
 	}
 }
-
 func (e *EventPoller) eventsPoller() {
 	defer e.wg.Done()
 	for {

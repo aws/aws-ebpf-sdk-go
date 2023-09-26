@@ -2,6 +2,12 @@
 
 export GOPROXY = direct
 
+CURDIR       := $(abspath .)
+TESTDATADIR  := $(CURDIR)/test-data
+BPFTOOL      := bpftool
+CLANG        := clang
+LOGFILE_PATH ?= stdout
+
 UNAME_ARCH = $(shell uname -m)
 ARCH = $(lastword $(subst :, ,$(filter $(UNAME_ARCH):%,x86_64:x86 aarch64:arm64)))
 
@@ -29,33 +35,42 @@ check-format: format
 vet:    ## Run go vet on source code.
 	go vet $(ALLPKGS)
 
-# Build BPF
-CLANG := clang
-CLANG_INCLUDE := -I../../..
-EBPF_SOURCE := test-data/tc.ingress.bpf.c
-EBPF_BINARY := test-data/tc.ingress.bpf.elf
-EBPF_TEST_SOURCE := test-data/tc.bpf.c
-EBPF_TEST_BINARY := test-data/tc.bpf.elf 
-EBPF_TEST_MAP_SOURCE := test-data/test.map.bpf.c
-EBPF_TEST_MAP_BINARY := test-data/test.map.bpf.elf
-EBPF_TEST_LIC_SOURCE := test-data/test_license.bpf.c
-EBPF_TEST_LIC_BINARY := test-data/test_license.bpf.elf
-EBPF_TEST_INV_MAP_SOURCE := test-data/invalid_map.bpf.c
-EBPF_TEST_INV_MAP_BINARY := test-data/invalid_map.bpf.elf   
-build-bpf: ## Build BPF
-	$(CLANG) $(CLANG_INCLUDE) -g -O2 -Wall -fpie -target bpf -DCORE -D__BPF_TRACING__ -march=bpf -D__TARGET_ARCH_$(ARCH) -c $(EBPF_SOURCE) -o $(EBPF_BINARY)
-	$(CLANG) $(CLANG_INCLUDE) -g -O2 -Wall -fpie -target bpf -DCORE -D__BPF_TRACING__ -march=bpf -D__TARGET_ARCH_$(ARCH) -c $(EBPF_TEST_SOURCE) -o $(EBPF_TEST_BINARY)
-	$(CLANG) $(CLANG_INCLUDE) -g -O2 -Wall -fpie -target bpf -DCORE -D__BPF_TRACING__ -march=bpf -D__TARGET_ARCH_$(ARCH) -c $(EBPF_TEST_MAP_SOURCE) -o $(EBPF_TEST_MAP_BINARY)
-	$(CLANG) $(CLANG_INCLUDE) -g -O2 -Wall -fpie -target bpf -DCORE -D__BPF_TRACING__ -march=bpf -D__TARGET_ARCH_$(ARCH) -c $(EBPF_TEST_LIC_SOURCE) -o $(EBPF_TEST_LIC_BINARY)
-	$(CLANG) $(CLANG_INCLUDE) -g -O2 -Wall -fpie -target bpf -DCORE -D__BPF_TRACING__ -march=bpf -D__TARGET_ARCH_$(ARCH) -c $(EBPF_TEST_INV_MAP_SOURCE) -o $(EBPF_TEST_INV_MAP_BINARY)
 
-vmlinuxh:
-	bpftool btf dump file /sys/kernel/btf/vmlinux format c > $(abspath ./test-data/vmlinux.h)
+# Build BPF
+CLANG_INCLUDE := -I../../..
+BPF_CFLAGS := -g -O2 -Wall -fpie -target bpf -DCORE -D__BPF_TRACING__ -D__TARGET_ARCH_$(ARCH) 
+TARGETS := \
+		  $(TESTDATADIR)/tc.ingress \
+		  $(TESTDATADIR)/tc \
+		  $(TESTDATADIR)/test.map \
+		  $(TESTDATADIR)/test_license \
+		  $(TESTDATADIR)/invalid_map \
+		  $(TESTDATADIR)/recoverydata \
+		  $(TESTDATADIR)/test-kprobe \
+		  $(TESTDATADIR)/xdp \
+		  $(TESTDATADIR)/ring_buffer
+
+%.bpf.elf: %.bpf.c
+	$(CLANG) $(CLANG_INCLUDE) $(BPF_CFLAGS) -c $< -o $@
+
+## check if the vmlinux exists in /sys/kernel/btf directory
+VMLINUX_BTF ?= $(wildcard /sys/kernel/btf/vmlinux)
+ifeq ($(VMLINUX_BTF),)
+$(error Cannot find a vmlinux)
+endif
+
+$(TESTDATADIR)/vmlinux.h:
+	$(BPFTOOL) btf dump file $(VMLINUX_BTF) format c > $@
 
 ##@ Run Unit Tests
 # Run unit tests
-unit-test: vmlinuxh
-unit-test: build-bpf
-unit-test: export AWS_EBPF_SDK_LOG_FILE=stdout
+unit-test: $(TESTDATADIR)/vmlinux.h
+unit-test: $(addsuffix .bpf.elf,$(TARGETS))
+unit-test: export AWS_EBPF_SDK_LOG_FILE=$(LOGFILE_PATH)
 unit-test:    ## Run unit tests
 	go test -v -coverprofile=coverage.txt -covermode=atomic ./pkg/...
+
+.PHONY: clean
+clean:
+	-@rm -f $(TESTDATADIR)/vmlinux.h
+	-@rm -f $(TESTDATADIR)/*.elf
