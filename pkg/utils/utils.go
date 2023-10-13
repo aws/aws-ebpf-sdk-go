@@ -17,6 +17,7 @@ package utils
 import (
 	"encoding/binary"
 	"fmt"
+	"math"
 	"os"
 	"runtime"
 	"syscall"
@@ -193,4 +194,8 @@ func Unmount_bpf_fs() error {
 		fmt.Println("error unmounting bpffs")
 	}
 	return err
+}
+
+func GetLogBufferSize() int {
+	return math.MaxUint32 >> 8
 }

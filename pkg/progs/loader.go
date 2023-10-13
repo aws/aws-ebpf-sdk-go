@@ -211,12 +211,12 @@ func (m *BpfProgram) LoadProg(progMetaData CreateEBPFProgInput) (int, error) {
 		prog_type = uint32(netlink.BPF_PROG_TYPE_UNSPEC)
 	}
 
-	logBuf := make([]byte, 65535)
+	logBuf := make([]byte, utils.GetLogBufferSize())
 	program := netlink.BPFAttr{
 		ProgType: prog_type,
 		LogBuf:   uintptr(unsafe.Pointer(&logBuf[0])),
 		LogSize:  uint32(cap(logBuf) - 1),
-		LogLevel: 4,
+		LogLevel: 1,
 	}
 
 	program.Insns = uintptr(unsafe.Pointer(&progMetaData.ProgData[0]))
