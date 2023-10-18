@@ -55,6 +55,7 @@ func main() {
 	mount_bpf_fs()
 	testFunctions := []testFunc{
 		{Name: "Test loading Program", Func: TestLoadProg},
+		{Name: "Test loading V6 Program", Func: TestLoadv6Prog},
 		{Name: "Test loading TC filter", Func: TestLoadTCfilter},
 		{Name: "Test loading Maps without Program", Func: TestLoadMapWithNoProg},
 		{Name: "Test loading Map operations", Func: TestMapOperations},
@@ -99,6 +100,20 @@ func main() {
 func TestLoadProg() error {
 	gosdkClient := goelf.New()
 	progInfo, _, err := gosdkClient.LoadBpfFile("c/test.bpf.elf", "test")
+	if err != nil {
+		fmt.Println("Load BPF failed", "err:", err)
+		return err
+	}
+
+	for pinPath, _ := range progInfo {
+		fmt.Println("Prog Info: ", "Pin Path: ", pinPath)
+	}
+	return nil
+}
+
+func TestLoadv6Prog() error {
+	gosdkClient := goelf.New()
+	progInfo, _, err := gosdkClient.LoadBpfFile("c/test-v6.bpf.elf", "test")
 	if err != nil {
 		fmt.Println("Load BPF failed", "err:", err)
 		return err

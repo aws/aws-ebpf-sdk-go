@@ -24,7 +24,7 @@ Note: This is the first version of SDK and interface is subject to change so kin
 
 ## How to build SDK?
 
-Run `make buid-linux` - this will build the sdk binary.
+Run `make build-linux` - this will build the sdk binary.
 
 ## How to build elf file?
 

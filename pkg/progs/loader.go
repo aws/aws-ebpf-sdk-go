@@ -19,6 +19,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"syscall"
 	"unsafe"
 
@@ -184,6 +185,12 @@ func (m *BpfProgram) UnPinProg(pinPath string) error {
 	return unix.Close(int(m.ProgFD))
 }
 
+func parseLogs(log []byte) []string {
+	logStr := string(log)
+	logs := strings.Split(logStr, "\n")
+	return logs
+}
+
 func (m *BpfProgram) LoadProg(progMetaData CreateEBPFProgInput) (int, error) {
 
 	var prog_type uint32
@@ -204,7 +211,7 @@ func (m *BpfProgram) LoadProg(progMetaData CreateEBPFProgInput) (int, error) {
 		prog_type = uint32(netlink.BPF_PROG_TYPE_UNSPEC)
 	}
 
-	logBuf := make([]byte, 65535)
+	logBuf := make([]byte, utils.GetLogBufferSize())
 	program := netlink.BPFAttr{
 		ProgType: prog_type,
 		LogBuf:   uintptr(unsafe.Pointer(&logBuf[0])),
@@ -227,7 +234,10 @@ func (m *BpfProgram) LoadProg(progMetaData CreateEBPFProgInput) (int, error) {
 
 	log.Infof("Load prog done with fd : %d", int(fd))
 	if errno != 0 {
-		log.Errorf(string(logBuf))
+		logArray := parseLogs(logBuf)
+		for _, str := range logArray {
+			fmt.Println(str)
+		}
 		return -1, errno
 	}
 

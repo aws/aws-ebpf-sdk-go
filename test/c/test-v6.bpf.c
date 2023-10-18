@@ -26,12 +26,12 @@ struct bpf_map_def_pvt {
 struct keystruct
 {
   __u32 prefix_len;
-  __u8  ip[4];
+  __u8  ip[16];
 };
 
 struct lpm_trie_key {
     __u32 prefixlen;
-    __u32 ip;
+    __u8  ip[16];
 };
 
 struct lpm_trie_val {
@@ -55,31 +55,38 @@ int handle_ingress(struct __sk_buff *skb)
 {
 	struct keystruct trie_key;
 	struct lpm_trie_val *trie_val;
-	__u32 l4_src_port = 0;
-	__u32 l4_dst_port = 0;
+	__u16 l4_src_port = 0;
+	__u16 l4_dst_port = 0;
 	void *data_end = (void *)(long)skb->data_end;
 	void *data = (void *)(long)skb->data;
+
 
 	struct ethhdr *ether = data;
 	if (data + sizeof(*ether) > data_end) {
 		return BPF_OK;
 	}
 
-	if (ether->h_proto == 0x08U) {  // htons(ETH_P_IP) -> 0x08U
+	if (ether->h_proto == 0xdd86) {  // htons(ETH_P_IPV6) -> 0x086ddU
 		data += sizeof(*ether);
-		struct iphdr *ip = data;
-		struct tcphdr *l4_tcp_hdr = data + sizeof(struct iphdr);
-		struct udphdr *l4_udp_hdr = data + sizeof(struct iphdr);
-		struct sctphdr *l4_sctp_hdr = data + sizeof(struct iphdr);
+		struct ipv6hdr *ip = data;
+		struct tcphdr *l4_tcp_hdr = data + sizeof(struct ipv6hdr);
+		struct udphdr *l4_udp_hdr = data + sizeof(struct ipv6hdr);
+		struct sctphdr *l4_sctp_hdr = data + sizeof(struct ipv6hdr);
 
 		if (data + sizeof(*ip) > data_end) {
 			return BPF_OK;
 		}
-		if (ip->version != 4) {
+
+		if (ip->version != 6) {
 			return BPF_OK;
 		}
 
-		switch (ip->protocol) {
+		//ICMPv6 - Neighbor Discovery Packets
+		if (ip->nexthdr == 58) {
+			return BPF_OK;
+		}
+
+		switch (ip->nexthdr) {
 			case IPPROTO_TCP:
 				if (data + sizeof(*ip) + sizeof(*l4_tcp_hdr) > data_end) {
 					return BPF_OK;
@@ -103,12 +110,13 @@ int handle_ingress(struct __sk_buff *skb)
 				break;
 		}
 
-		trie_key.prefix_len = 32;
-		trie_key.ip[0] = ip->saddr & 0xff;
-		trie_key.ip[1] = (ip->saddr >> 8) & 0xff;
-		trie_key.ip[2] = (ip->saddr >> 16) & 0xff;
-		trie_key.ip[3] = (ip->saddr >> 24) & 0xff;
+		trie_key.prefix_len = 128;
+		//Fill the IP Key to be used for lookup
+		for (int i=0; i<16; i++){
+			trie_key.ip[i] = ip->saddr.in6_u.u6_addr8[i];
+		}
 
+		//Check if it's in the allowed list
 		trie_val = bpf_map_lookup_elem(&ingress_map, &trie_key);
 		if (trie_val == NULL) {
 			return BPF_DROP;
@@ -119,17 +127,16 @@ int handle_ingress(struct __sk_buff *skb)
 				return BPF_DROP;
 			}
 
-			if ((trie_val->protocol == ANY_IP_PROTOCOL) || (trie_val->protocol == ip->protocol &&
+			if ((trie_val->protocol == ANY_IP_PROTOCOL) || (trie_val->protocol == ip->nexthdr &&
 						((trie_val->start_port == ANY_PORT) || (l4_dst_port == trie_val->start_port) ||
 						 (l4_dst_port > trie_val->start_port && l4_dst_port <= trie_val->end_port)))) {
 				return BPF_OK;
 			}
 		}
-
-		return BPF_OK;
-
+		return BPF_DROP;
 	}
-	return BPF_DROP;
+	return BPF_OK;
+
 }
 
 char _license[] SEC("license") = "GPL";
