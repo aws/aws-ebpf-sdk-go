@@ -287,6 +287,7 @@ func (m *BpfMap) CreateUpdateMapEntry(key, value uintptr, updateFlags uint64) er
 		log.Errorf("unable to GetMapFDfromID and ret %d and err %s", int(mapFD), err)
 		return fmt.Errorf("unable to get FD: %s", err)
 	}
+	defer unix.Close(mapFD)
 
 	attr := utils.BpfMapAttr{
 		MapFD: uint32(mapFD),
@@ -309,7 +310,6 @@ func (m *BpfMap) CreateUpdateMapEntry(key, value uintptr, updateFlags uint64) er
 	}
 
 	log.Infof("Create/Update map entry done with fd : %d and err %s", int(ret), errno)
-	unix.Close(mapFD)
 	return nil
 }
 
@@ -320,6 +320,8 @@ func (m *BpfMap) DeleteMapEntry(key uintptr) error {
 		log.Errorf("unable to GetMapFDfromID and ID %d and err %s", int(m.MapID), err)
 		return fmt.Errorf("unable to get FD: %s", err)
 	}
+	defer unix.Close(mapFD)
+
 	attr := utils.BpfMapAttr{
 		MapFD: uint32(mapFD),
 		Key:   uint64(key),
@@ -336,7 +338,6 @@ func (m *BpfMap) DeleteMapEntry(key uintptr) error {
 	}
 
 	log.Infof("Delete map entry done with fd : %d and err %s", int(ret), errno)
-	unix.Close(mapFD)
 	return nil
 }
 
@@ -352,6 +353,8 @@ func (m *BpfMap) GetNextMapEntry(key, nextKey uintptr) error {
 		log.Errorf("unable to GetMapFDfromID and ret %d and err %s", int(mapFD), err)
 		return fmt.Errorf("unable to get FD: %s", err)
 	}
+	defer unix.Close(mapFD)
+
 	attr := utils.BpfMapAttr{
 		MapFD: uint32(mapFD),
 		Key:   uint64(key),
@@ -365,17 +368,14 @@ func (m *BpfMap) GetNextMapEntry(key, nextKey uintptr) error {
 	)
 	if errors.Is(errno, unix.ENOENT) {
 		log.Errorf("last entry read done")
-		unix.Close(mapFD)
 		return errno
 	}
 	if errno != 0 {
 		log.Errorf("unable to get next map entry and ret %d and err %s", int(ret), errno)
-		unix.Close(mapFD)
 		return fmt.Errorf("unable to get next map entry: %s", errno)
 	}
 
 	log.Infof("Got next map entry with fd : %d and err %s", int(ret), errno)
-	unix.Close(mapFD)
 	return nil
 }
 
@@ -418,6 +418,8 @@ func (m *BpfMap) GetMapEntry(key, value uintptr) error {
 		log.Errorf("unable to GetMapFDfromID and ret %d and err %s", int(mapFD), err)
 		return fmt.Errorf("unable to get FD: %s", err)
 	}
+	defer unix.Close(mapFD)
+
 	attr := utils.BpfMapAttr{
 		MapFD: uint32(mapFD),
 		Key:   uint64(key),
@@ -431,12 +433,10 @@ func (m *BpfMap) GetMapEntry(key, value uintptr) error {
 	)
 	if errno != 0 {
 		log.Errorf("unable to get map entry and ret %d and err %s", int(ret), errno)
-		unix.Close(mapFD)
 		return fmt.Errorf("unable to get next map entry: %s", errno)
 	}
 
 	log.Infof("Got map entry with fd : %d and err %s", int(ret), errno)
-	unix.Close(mapFD)
 	return nil
 }
 
@@ -578,6 +578,7 @@ func BpfGetAllMapInfo() ([]BpfMapInfo, error) {
 		bpfMapInfo, err := GetBPFmapInfo(mapfd)
 		if err != nil {
 			log.Errorf("failed to get map Info for FD", mapfd)
+			unix.Close(mapfd)
 			return nil, err
 		}
 		unix.Close(mapfd)
@@ -643,6 +644,8 @@ func GetNextMapEntryByID(key, nextKey uintptr, mapID int) error {
 		log.Errorf("unable to GetMapFDfromID and ret %d and err %s", int(mapFD), err)
 		return fmt.Errorf("unable to get FD: %s", err)
 	}
+
+	defer unix.Close(mapFD)
 	attr := utils.BpfMapAttr{
 		MapFD: uint32(mapFD),
 		Key:   uint64(key),
@@ -655,17 +658,14 @@ func GetNextMapEntryByID(key, nextKey uintptr, mapID int) error {
 		unsafe.Sizeof(attr),
 	)
 	if errors.Is(errno, unix.ENOENT) {
-		unix.Close(mapFD)
 		return errno
 	}
 	if errno != 0 {
 		log.Errorf("unable to get next map entry and ret %d and err %s", int(ret), errno)
-		unix.Close(mapFD)
 		return fmt.Errorf("unable to get next map entry: %s", errno)
 	}
 
 	log.Infof("Got next map entry with fd : %d and err %s", int(ret), errno)
-	unix.Close(mapFD)
 	return nil
 }
 
@@ -676,6 +676,7 @@ func GetMapEntryByID(key, value uintptr, mapID int) error {
 		log.Errorf("unable to GetMapFDfromID and ret %d and err %s", int(mapFD), err)
 		return fmt.Errorf("unable to get FD: %s", err)
 	}
+	defer unix.Close(mapFD)
 
 	attr := utils.BpfMapAttr{
 		MapFD: uint32(mapFD),
@@ -691,11 +692,9 @@ func GetMapEntryByID(key, value uintptr, mapID int) error {
 
 	if errno != 0 {
 		log.Errorf("unable to get map entry and ret %d and err %s", int(ret), errno)
-		unix.Close(mapFD)
 		return fmt.Errorf("unable to get next map entry: %s", errno)
 	}
 
 	log.Infof("Got map entry with ret : %d and err %s", int(ret), errno)
-	unix.Close(mapFD)
 	return nil
 }
