@@ -6,8 +6,8 @@ require (
 	github.com/golang/mock v1.6.0
 	github.com/stretchr/testify v1.8.4
 	github.com/vishvananda/netlink v1.1.0
-	go.uber.org/zap v1.25.0
-	golang.org/x/sys v0.12.0
+	go.uber.org/zap v1.26.0
+	golang.org/x/sys v0.14.0
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1
 )
 

@@ -493,7 +493,7 @@ func (m *BpfMap) BulkRefreshMapEntries(newMapContents map[string]uintptr) error 
 	// 4. Delete stale Keys
 	log.Infof("Check for stale entries and got %d entries from BPF map", len(retrievedMapKeyList))
 	for _, key := range retrievedMapKeyList {
-		log.Infof("Checking if key %s is deltable", key)
+		log.Infof("Checking if key %s is deletable", key)
 		if _, ok := newMapContents[key]; !ok {
 			log.Infof("This can be deleted, not needed anymore...")
 			deletableKeyByte := []byte(key)
