@@ -963,15 +963,6 @@ func (b *bpfSDKClient) GetAllBpfProgramsAndMaps() (map[string]BpfData, error) {
 					mapName, mapNamespace := GetMapNameFromBPFPinPath(pinPath)
 					mapIDsToNames[int(mapID)] = mapName
 
-					/*
-					mapFD, err := utils.GetMapFDFromID(int(mapID))
-					if err != nil {
-						log.Infof("Unable to GetFDfromID and ret %d and err %s", int(mapFD), err)
-						return fmt.Errorf("unable to get FD: %s", err)
-					}
-					log.Infof("Got FD %d", mapFD)
-					mapIDsToFDs[int(mapID)] = mapFD
-					*/
 					log.Infof("Adding ID %d to name %s and NS %s", mapID, mapName, mapNamespace)
 					mapPodSelector[mapNamespace] = mapIDsToNames
 				}
@@ -1008,7 +999,7 @@ func (b *bpfSDKClient) GetAllBpfProgramsAndMaps() (map[string]BpfData, error) {
 						log.Infof("Failed to progInfo for pinPath %s", pinPath)
 						return err
 					}
-					pgmData.ProgFD = 0 
+					pgmData.ProgID = int(bpfProgInfo.ID) 
 					//Conv type to string here
 
 					recoveredMapData := make(map[string]ebpf_maps.BpfMap)
