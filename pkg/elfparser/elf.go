@@ -1008,7 +1008,6 @@ func (b *bpfSDKClient) GetAllBpfProgramsAndMaps() (map[string]BpfData, error) {
 						log.Infof("Failed to progInfo for pinPath %s", pinPath)
 						return err
 					}
-					unix.Close(progFD)
 					pgmData.ProgFD = 0 
 					//Conv type to string here
 
@@ -1020,6 +1019,8 @@ func (b *bpfSDKClient) GetAllBpfProgramsAndMaps() (map[string]BpfData, error) {
 							log.Infof("Failed to get associated maps")
 							return err
 						}
+						//Close progFD..we don't need it
+						unix.Close(progFD)
 						for mapInfoIdx := 0; mapInfoIdx < len(associatedBpfMapList); mapInfoIdx++ {
 							bpfMapInfo := associatedBpfMapList[mapInfoIdx]
 							newMapID := associatedBPFMapIDs[mapInfoIdx]
