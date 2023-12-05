@@ -35,6 +35,21 @@ func (m *MockBpfSDKClient) EXPECT() *MockBpfSDKClientMockRecorder {
 	return m.recorder
 }
 
+// GetAllBpfProgramsAndMaps mocks base method.
+func (m *MockBpfSDKClient) GetAllBpfProgramsAndMaps() (map[string]elfparser.BpfData, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetAllBpfProgramsAndMaps")
+	ret0, _ := ret[0].(map[string]elfparser.BpfData)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetAllBpfProgramsAndMaps indicates an expected call of GetAllBpfProgramsAndMaps.
+func (mr *MockBpfSDKClientMockRecorder) GetAllBpfProgramsAndMaps() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetAllBpfProgramsAndMaps", reflect.TypeOf((*MockBpfSDKClient)(nil).GetAllBpfProgramsAndMaps))
+}
+
 // IncreaseRlimit mocks base method.
 func (m *MockBpfSDKClient) IncreaseRlimit() error {
 	m.ctrl.T.Helper()
