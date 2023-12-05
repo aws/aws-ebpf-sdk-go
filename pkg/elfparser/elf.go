@@ -733,7 +733,7 @@ func (b *bpfSDKClient) RecoverGlobalMaps() (map[string]ebpf_maps.BpfMap, error) 
 			}
 			return nil
 		}); err != nil {
-			log.Infof("Error walking bpfdirectory:", err)
+			log.Infof("Error walking bpf map directory:", err)
 			return nil, fmt.Errorf("error walking the bpfdirectory %v", err)
 		}
 	} else {
@@ -807,7 +807,7 @@ func (b *bpfSDKClient) RecoverAllBpfProgramsAndMaps() (map[string]BpfData, error
 				}
 				return nil
 			}); err != nil {
-				log.Infof("Error walking bpfdirectory:", err)
+				log.Infof("Error walking bpf map directory:", err)
 				return nil, fmt.Errorf("failed walking the bpfdirectory %v", err)
 			}
 		}
@@ -827,20 +827,14 @@ func (b *bpfSDKClient) RecoverAllBpfProgramsAndMaps() (map[string]BpfData, error
 					podIdentifier := strings.SplitN(splitedPinPath[len(splitedPinPath)-1], "_", 2)
 					log.Infof("Found Identified - %s : %s", podIdentifier[0], podIdentifier[1])
 
-					mapNamespace := podIdentifier[0]
-					if mapNamespace == "global" {
-						log.Infof("Skipping global progs")
-						return nil
-					}
+					progNamespace := podIdentifier[0]
 
-					//mapData := [string]ebpf_maps.BPFMap{}
 					bpfProgInfo, progFD, err := (b.progApi).GetProgFromPinPath(pinPath)
 					if err != nil {
 						log.Infof("Failed to progInfo for pinPath %s", pinPath)
 						return err
 					}
 					pgmData.ProgFD = progFD
-					//Conv type to string here
 
 					recoveredMapData := make(map[string]ebpf_maps.BpfMap)
 					if bpfProgInfo.NrMapIDs > 0 {
@@ -858,9 +852,9 @@ func (b *bpfSDKClient) RecoverAllBpfProgramsAndMaps() (map[string]BpfData, error
 							//Fill BPF map
 							recoveredBpfMap.MapID = uint32(newMapID)
 
-							mapIds, ok := mapPodSelector[mapNamespace]
+							mapIds, ok := mapPodSelector[progNamespace]
 							if !ok {
-								log.Infof("Failed to ID for %s", mapNamespace)
+								log.Infof("Failed to get ID for %s", progNamespace)
 								return fmt.Errorf("failed to get err")
 							}
 							mapName := mapIds[int(recoveredBpfMap.MapID)]
@@ -875,7 +869,7 @@ func (b *bpfSDKClient) RecoverAllBpfProgramsAndMaps() (map[string]BpfData, error
 								//Fill New FD since old FDs will be deleted on recovery
 								localMapFD, ok := mapIDsToFDs[int(newMapID)]
 								if !ok {
-									log.Infof("Unable to Get FD from ID %d", int(newMapID))
+									log.Infof("Unable to get FD from ID %d", int(newMapID))
 									return fmt.Errorf("unable to get FD")
 								}
 								mapFD = localMapFD
@@ -905,7 +899,7 @@ func (b *bpfSDKClient) RecoverAllBpfProgramsAndMaps() (map[string]BpfData, error
 				}
 				return nil
 			}); err != nil {
-				log.Infof("Error walking bpfdirectory:", err)
+				log.Infof("Error walking bpf prog directory:", err)
 				return nil, fmt.Errorf("failed walking the bpfdirectory %v", err)
 			}
 		}
