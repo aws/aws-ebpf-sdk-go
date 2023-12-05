@@ -642,8 +642,8 @@ func (e *elfLoader) doLoadELF() (map[string]BpfData, map[string]ebpf_maps.BpfMap
 
 func GetMapNameFromBPFPinPath(pinPath string) (string, string) {
 
-	splitedPinPath := strings.Split(pinPath, "/")
-	podIdentifier := strings.SplitN(splitedPinPath[len(splitedPinPath)-1], "_", 2)
+	splittedPinPath := strings.Split(pinPath, "/")
+	podIdentifier := strings.SplitN(splittedPinPath[len(splittedPinPath)-1], "_", 2)
 	log.Infof("Found Identified - %s : %s", podIdentifier[0], podIdentifier[1])
 
 	mapNamespace := podIdentifier[0]
@@ -651,7 +651,7 @@ func GetMapNameFromBPFPinPath(pinPath string) (string, string) {
 
 	log.Infof("Found ->  ", mapNamespace, mapName)
 
-	directionIdentifier := strings.Split(splitedPinPath[len(splitedPinPath)-1], "_")
+	directionIdentifier := strings.Split(splittedPinPath[len(splittedPinPath)-1], "_")
 	direction := directionIdentifier[1]
 
 	if direction == "ingress" {
@@ -823,8 +823,8 @@ func (b *bpfSDKClient) RecoverAllBpfProgramsAndMaps() (map[string]BpfData, error
 					pgmData := ebpf_progs.BpfProgram{
 						PinPath: pinPath,
 					}
-					splitedPinPath := strings.Split(pinPath, "/")
-					podIdentifier := strings.SplitN(splitedPinPath[len(splitedPinPath)-1], "_", 2)
+					splittedPinPath := strings.Split(pinPath, "/")
+					podIdentifier := strings.SplitN(splittedPinPath[len(splittedPinPath)-1], "_", 2)
 					log.Infof("Found Identified - %s : %s", podIdentifier[0], podIdentifier[1])
 
 					progNamespace := podIdentifier[0]
@@ -978,8 +978,8 @@ func (b *bpfSDKClient) GetAllBpfProgramsAndMaps() (map[string]BpfData, error) {
 					pgmData := ebpf_progs.BpfProgram{
 						PinPath: pinPath,
 					}
-					splitedPinPath := strings.Split(pinPath, "/")
-					podIdentifier := strings.SplitN(splitedPinPath[len(splitedPinPath)-1], "_", 2)
+					splittedPinPath := strings.Split(pinPath, "/")
+					podIdentifier := strings.SplitN(splittedPinPath[len(splittedPinPath)-1], "_", 2)
 					log.Infof("Found Identified - %s : %s", podIdentifier[0], podIdentifier[1])
 
 					mapNamespace := podIdentifier[0]
