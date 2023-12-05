@@ -828,6 +828,10 @@ func (b *bpfSDKClient) RecoverAllBpfProgramsAndMaps() (map[string]BpfData, error
 					log.Infof("Found Identified - %s : %s", podIdentifier[0], podIdentifier[1])
 
 					progNamespace := podIdentifier[0]
+					if progNamespace == "global" {
+						log.Infof("Skipping global progs")
+						return nil
+					}
 
 					bpfProgInfo, progFD, err := (b.progApi).GetProgFromPinPath(pinPath)
 					if err != nil {
