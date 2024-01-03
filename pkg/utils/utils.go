@@ -16,7 +16,9 @@ package utils
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
+	"io/fs"
 	"math"
 	"os"
 	"runtime"
@@ -83,11 +85,17 @@ func PinObject(objFD uint32, pinPath string) error {
 }
 
 func IsfileExists(fname string) bool {
+	log := logger.Get()
 	info, err := os.Stat(fname)
-	if os.IsNotExist(err) {
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
 		return false
+	case err != nil:
+		log.Errorf("Error while checking file %s: %v", fname, err)
+		return false
+	default:
+		return !info.IsDir()
 	}
-	return !info.IsDir()
 }
 
 func UnPinObject(pinPath string) error {
