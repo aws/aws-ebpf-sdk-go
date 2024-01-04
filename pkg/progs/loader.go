@@ -143,9 +143,11 @@ func MountBpfFS() error {
 }
 
 func (m *BpfProgram) PinProg(progFD uint32, pinPath string) error {
-
-	var err error
-	if utils.IsfileExists(pinPath) {
+	found, err := utils.IsfileExists(pinPath)
+	if err != nil {
+		return fmt.Errorf("unable to check file: %w", err)
+	}
+	if found {
 		log.Infof("Found file %s so deleting the path", pinPath)
 		err = utils.UnPinObject(pinPath)
 		if err != nil {
