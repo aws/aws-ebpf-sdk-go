@@ -229,7 +229,11 @@ func (m *BpfMap) PinMap(pinPath string, pinType uint32) error {
 	if pinType == constdef.PIN_GLOBAL_NS.Index() {
 
 		//If pinPath is already present lets delete and create a new one
-		if utils.IsfileExists(pinPath) {
+		found, err := utils.IsfileExists(pinPath)
+		if err != nil {
+			return fmt.Errorf("unable to check file: %w", err)
+		}
+		if found {
 			log.Infof("Found file %s so deleting the path", pinPath)
 			err := utils.UnPinObject(pinPath)
 			if err != nil {
@@ -237,7 +241,7 @@ func (m *BpfMap) PinMap(pinPath string, pinType uint32) error {
 				return err
 			}
 		}
-		err := os.MkdirAll(filepath.Dir(pinPath), 0755)
+		err = os.MkdirAll(filepath.Dir(pinPath), 0755)
 		if err != nil {
 			log.Errorf("error creating directory %s: %v", filepath.Dir(pinPath), err)
 			return fmt.Errorf("error creating directory %s: %v", filepath.Dir(pinPath), err)
