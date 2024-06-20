@@ -59,6 +59,7 @@ func main() {
 		{Name: "Test loading TC filter", Func: TestLoadTCfilter},
 		{Name: "Test loading Maps without Program", Func: TestLoadMapWithNoProg},
 		{Name: "Test loading Map operations", Func: TestMapOperations},
+		{Name: "Test updating Map size", Func: TestLoadMapWithCustomSize},
 	}
 
 	testSummary := make(map[string]string)
@@ -315,4 +316,27 @@ func TestLoadTCfilter() error {
 		fmt.Println("Failed attaching ingress probe")
 	}
 	return nil
+}
+
+func TestLoadMapWithCustomSize() error {
+	gosdkClient := goelf.New()
+
+	var customData goelf.BpfCustomData
+	customData.FilePath = "c/test-map.bpf.elf"
+	customData.CustomPinPath = "test"
+	customData.CustomMapSize = make(map[string]int)
+	customData.CustomMapSize["ingress_map"] = 1024
+
+	_, loadedMap, err := gosdkClient.LoadBpfFileWithCustomData(customData)
+	if err != nil {
+		fmt.Println("Load BPF failed", "err:", err)
+		return err
+	}
+
+	for mapName, mapData := range loadedMap {
+		fmt.Println("Map Info: ", "Name: ", mapName)
+		fmt.Println("Map Info: ", "Size: ", mapData.MapMetaData.MaxEntries)
+	}
+	return nil
+
 }
