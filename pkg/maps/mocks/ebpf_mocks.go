@@ -49,7 +49,7 @@ func (mr *MockBpfMapAPIsMockRecorder) BulkDeleteMapEntry(arg0 interface{}) *gomo
 }
 
 // BulkRefreshMapEntries mocks base method.
-func (m *MockBpfMapAPIs) BulkRefreshMapEntries(arg0 map[string]uintptr) error {
+func (m *MockBpfMapAPIs) BulkRefreshMapEntries(arg0 map[string][]byte) error {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "BulkRefreshMapEntries", arg0)
 	ret0, _ := ret[0].(error)
@@ -63,7 +63,7 @@ func (mr *MockBpfMapAPIsMockRecorder) BulkRefreshMapEntries(arg0 interface{}) *g
 }
 
 // BulkUpdateMapEntry mocks base method.
-func (m *MockBpfMapAPIs) BulkUpdateMapEntry(arg0 map[uintptr]uintptr) error {
+func (m *MockBpfMapAPIs) BulkUpdateMapEntry(arg0 map[string][]byte) error {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "BulkUpdateMapEntry", arg0)
 	ret0, _ := ret[0].(error)
