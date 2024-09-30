@@ -101,7 +101,7 @@ func TestLoad(t *testing.T) {
 			elfFile, err := elf.NewFile(f)
 			assert.NoError(t, err)
 			elfLoader := newElfLoader(elfFile, m.ebpf_maps, m.ebpf_progs, "test")
-			loadedProgs, loadedMaps, err := elfLoader.doLoadELF()
+			loadedProgs, loadedMaps, err := elfLoader.doLoadELF(BpfCustomData{})
 			assert.NoError(t, err)
 			assert.Equal(t, tt.wantProg, len(loadedProgs))
 			assert.Equal(t, tt.wantMap, len(loadedMaps))
@@ -334,7 +334,7 @@ func TestParseMap(t *testing.T) {
 
 			err = elfLoader.parseSection()
 			assert.NoError(t, err)
-			mapData, err := elfLoader.parseMap()
+			mapData, err := elfLoader.parseMap(BpfCustomData{})
 			if tt.wantErr != nil {
 				assert.EqualError(t, err, tt.wantErr.Error())
 			} else {
@@ -388,7 +388,7 @@ func TestParseMap(t *testing.T) {
 				copiedMapSection.SectionHeader = dummySection.SectionHeader
 				elfLoader.mapSection = &copiedMapSection
 			}
-			mapData, err := elfLoader.parseMap()
+			mapData, err := elfLoader.parseMap(BpfCustomData{})
 			if tt.wantErr != nil {
 				assert.EqualError(t, err, tt.wantErr.Error())
 			} else {
@@ -456,7 +456,7 @@ func TestParseProg(t *testing.T) {
 			err = elfLoader.parseSection()
 			assert.NoError(t, err)
 
-			mapData, err := elfLoader.parseMap()
+			mapData, err := elfLoader.parseMap(BpfCustomData{})
 			assert.NoError(t, err)
 
 			m.ebpf_maps.EXPECT().CreateBPFMap(gomock.Any()).AnyTimes()

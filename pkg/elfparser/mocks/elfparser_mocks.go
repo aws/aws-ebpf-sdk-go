@@ -35,6 +35,21 @@ func (m *MockBpfSDKClient) EXPECT() *MockBpfSDKClientMockRecorder {
 	return m.recorder
 }
 
+// GetAllBpfProgramsAndMaps mocks base method.
+func (m *MockBpfSDKClient) GetAllBpfProgramsAndMaps() (map[string]elfparser.BpfData, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetAllBpfProgramsAndMaps")
+	ret0, _ := ret[0].(map[string]elfparser.BpfData)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetAllBpfProgramsAndMaps indicates an expected call of GetAllBpfProgramsAndMaps.
+func (mr *MockBpfSDKClientMockRecorder) GetAllBpfProgramsAndMaps() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetAllBpfProgramsAndMaps", reflect.TypeOf((*MockBpfSDKClient)(nil).GetAllBpfProgramsAndMaps))
+}
+
 // IncreaseRlimit mocks base method.
 func (m *MockBpfSDKClient) IncreaseRlimit() error {
 	m.ctrl.T.Helper()
@@ -63,6 +78,22 @@ func (m *MockBpfSDKClient) LoadBpfFile(arg0, arg1 string) (map[string]elfparser.
 func (mr *MockBpfSDKClientMockRecorder) LoadBpfFile(arg0, arg1 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "LoadBpfFile", reflect.TypeOf((*MockBpfSDKClient)(nil).LoadBpfFile), arg0, arg1)
+}
+
+// LoadBpfFileWithCustomData mocks base method.
+func (m *MockBpfSDKClient) LoadBpfFileWithCustomData(arg0 elfparser.BpfCustomData) (map[string]elfparser.BpfData, map[string]maps.BpfMap, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "LoadBpfFileWithCustomData", arg0)
+	ret0, _ := ret[0].(map[string]elfparser.BpfData)
+	ret1, _ := ret[1].(map[string]maps.BpfMap)
+	ret2, _ := ret[2].(error)
+	return ret0, ret1, ret2
+}
+
+// LoadBpfFileWithCustomData indicates an expected call of LoadBpfFileWithCustomData.
+func (mr *MockBpfSDKClientMockRecorder) LoadBpfFileWithCustomData(arg0 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "LoadBpfFileWithCustomData", reflect.TypeOf((*MockBpfSDKClient)(nil).LoadBpfFileWithCustomData), arg0)
 }
 
 // RecoverAllBpfProgramsAndMaps mocks base method.
