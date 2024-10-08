@@ -168,11 +168,11 @@ type BpfMapAPIs interface {
 	// Get map value
 	GetMapEntry(key, value uintptr) error
 	// Update multiple map entries
-	BulkUpdateMapEntry(keyvalue map[uintptr]uintptr) error
+	BulkUpdateMapEntry(keyvalue map[string][]byte) error
 	// Delete multiple map entries
 	BulkDeleteMapEntry(keyvalue map[uintptr]uintptr) error
 	// Wrapper for delete and update map entries
-	BulkRefreshMapEntries(newMapContents map[string]uintptr) error
+	BulkRefreshMapEntries(newMapContents map[string][]byte) error
 	// Retrieve map info from pin path
 	GetMapFromPinPath(pinPath string) (BpfMapInfo, error)
 }
@@ -456,9 +456,12 @@ func (m *BpfMap) BulkDeleteMapEntry(keyvalue map[uintptr]uintptr) error {
 	return nil
 }
 
-func (m *BpfMap) BulkUpdateMapEntry(keyvalue map[uintptr]uintptr) error {
+func (m *BpfMap) BulkUpdateMapEntry(keyvalue map[string][]byte) error {
 	for k, v := range keyvalue {
-		err := m.UpdateMapEntry(k, v)
+		keyByte := []byte(k)
+		keyPtr := uintptr(unsafe.Pointer(&keyByte[0]))
+		valuePtr := uintptr(unsafe.Pointer(&v[0]))
+		err := m.UpdateMapEntry(keyPtr, valuePtr)
 		if err != nil {
 			log.Infof("One of the element update failed hence returning from bulk update")
 			return err
@@ -468,33 +471,23 @@ func (m *BpfMap) BulkUpdateMapEntry(keyvalue map[uintptr]uintptr) error {
 	return nil
 }
 
-func (m *BpfMap) BulkRefreshMapEntries(newMapContents map[string]uintptr) error {
+func (m *BpfMap) BulkRefreshMapEntries(newMapContents map[string][]byte) error {
 
-	// 1. Construct i/p to bulkMap
-	keyvaluePtr := make(map[uintptr]uintptr)
-
-	for k, v := range newMapContents {
-		keyByte := []byte(k)
-		log.Infof("Converted string to bytearray %v", keyByte)
-		keyPtr := uintptr(unsafe.Pointer(&keyByte[0]))
-		keyvaluePtr[keyPtr] = v
-	}
-
-	// 2. Update all map entries
-	err := m.BulkUpdateMapEntry(keyvaluePtr)
+	// 1. Update all map entries
+	err := m.BulkUpdateMapEntry(newMapContents)
 	if err != nil {
 		log.Errorf("refresh map failed: during update %v", err)
 		return err
 	}
 
-	// 3. Read all map entries
+	// 2. Read all map entries
 	retrievedMapKeyList, err := m.GetAllMapKeys()
 	if err != nil {
 		log.Errorf("get all map keys failed: during Refresh %v", err)
 		return err
 	}
 
-	// 4. Delete stale Keys
+	// 3. Delete stale Keys
 	log.Infof("Check for stale entries and got %d entries from BPF map", len(retrievedMapKeyList))
 	for _, key := range retrievedMapKeyList {
 		log.Infof("Checking if key %s is deletable", key)

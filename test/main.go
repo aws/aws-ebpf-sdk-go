@@ -1,7 +1,9 @@
 package main
 
 import (
+	"encoding/binary"
 	"fmt"
+	"net"
 	"os"
 	"strings"
 	"syscall"
@@ -60,6 +62,8 @@ func main() {
 		{Name: "Test loading Maps without Program", Func: TestLoadMapWithNoProg},
 		{Name: "Test loading Map operations", Func: TestMapOperations},
 		{Name: "Test updating Map size", Func: TestLoadMapWithCustomSize},
+		{Name: "Test bulk Map operations", Func: TestBulkMapOperations},
+		{Name: "Test bulk refresh Map operations", Func: TestBulkRefreshMapOperations},
 	}
 
 	testSummary := make(map[string]string)
@@ -339,4 +343,144 @@ func TestLoadMapWithCustomSize() error {
 	}
 	return nil
 
+}
+
+func TestBulkMapOperations() error {
+	gosdkClient := goelf.New()
+	_, loadedMap, err := gosdkClient.LoadBpfFile("c/test-map.bpf.elf", "operations")
+	if err != nil {
+		fmt.Println("Load BPF failed", "err:", err)
+		return err
+	}
+
+	for mapName, _ := range loadedMap {
+		fmt.Println("Map Info: ", "Name: ", mapName)
+	}
+
+	type BPFInetTrieKey struct {
+		Prefixlen uint32
+		Addr      [4]byte
+	}
+
+	const numEntries = 32 * 1000 // 32K entries
+
+	// Create 32K entries
+	mapToUpdate, ok := loadedMap["ingress_map"]
+	if !ok {
+		return fmt.Errorf("map 'ingress_map' not found")
+	}
+
+	for i := 0; i < numEntries; i++ {
+		dummykey := BPFInetTrieKey{
+			Prefixlen: 32,
+			Addr:      [4]byte{byte(192 + i/256), byte(168 + (i/256)%256), byte(i % 256), 0},
+		}
+		dummyvalue := uint32(40)
+
+		err = mapToUpdate.CreateMapEntry(uintptr(unsafe.Pointer(&dummykey)), uintptr(unsafe.Pointer(&dummyvalue)))
+		if err != nil {
+			fmt.Println("Unable to Insert into eBPF map: ", err)
+			return err
+		}
+	}
+	fmt.Println("Created 32K entries successfully")
+
+	// Update 32K entries
+	for i := 0; i < numEntries; i++ {
+		dummykey := BPFInetTrieKey{
+			Prefixlen: 32,
+			Addr:      [4]byte{byte(192 + i/256), byte(168 + (i/256)%256), byte(i % 256), 0},
+		}
+		dummyvalue := uint32(20)
+
+		err = mapToUpdate.UpdateMapEntry(uintptr(unsafe.Pointer(&dummykey)), uintptr(unsafe.Pointer(&dummyvalue)))
+		if err != nil {
+			fmt.Println("Unable to Update into eBPF map: ", err)
+			return err
+		}
+	}
+	fmt.Println("Updated 32K entries successfully")
+
+	return nil
+}
+
+func ComputeTrieKey(n net.IPNet) []byte {
+	prefixLen, _ := n.Mask.Size()
+	key := make([]byte, 8)
+
+	// Set the prefix length
+	key[0] = byte(prefixLen)
+
+	// Set the IP address
+	copy(key[4:], n.IP.To4())
+
+	fmt.Printf("Key: %v\n", key)
+	return key
+}
+
+type BPFInetTrieKey struct {
+	Prefixlen uint32
+	Addr      [4]byte
+}
+
+func bpfInetTrieKeyToIPNet(key BPFInetTrieKey) net.IPNet {
+	ip := net.IPv4(key.Addr[0], key.Addr[1], key.Addr[2], key.Addr[3])
+	return net.IPNet{
+		IP:   ip,
+		Mask: net.CIDRMask(int(key.Prefixlen), 32),
+	}
+}
+
+func TestBulkRefreshMapOperations() error {
+	gosdkClient := goelf.New()
+	_, loadedMap, err := gosdkClient.LoadBpfFile("c/test-map.bpf.elf", "operations")
+	if err != nil {
+		fmt.Println("Load BPF failed", "err:", err)
+		return err
+	}
+
+	for mapName, _ := range loadedMap {
+		fmt.Println("Map Info: ", "Name: ", mapName)
+	}
+
+	const numEntries = 32 * 1000 // 32K entries
+	// Create 32K entries
+	mapToUpdate, ok := loadedMap["ingress_map"]
+	if !ok {
+		return fmt.Errorf("map 'ingress_map' not found")
+	}
+
+	newMapContents := make(map[string][]byte, numEntries)
+	for i := 0; i < numEntries; i++ {
+		dummykey := BPFInetTrieKey{
+			Prefixlen: 32,
+			Addr:      [4]byte{byte(1 + i/65536), byte(0 + (i/256)%256), byte(i % 256), 0},
+		}
+		dummyvalue := uint32(40)
+
+		err = mapToUpdate.CreateMapEntry(uintptr(unsafe.Pointer(&dummykey)), uintptr(unsafe.Pointer(&dummyvalue)))
+		if err != nil {
+			fmt.Println("Unable to Insert into eBPF map: ", err)
+			return err
+		}
+		dummyvalue = uint32(50)
+		ipnet := bpfInetTrieKeyToIPNet(dummykey)
+		fmt.Println(ipnet)
+		keyByte := ComputeTrieKey(ipnet)
+		dummyValueByteArray := make([]byte, 4)
+		binary.LittleEndian.PutUint32(dummyValueByteArray, dummyvalue)
+		newMapContents[string(keyByte)] = dummyValueByteArray
+
+	}
+	fmt.Println("Created 32K entries successfully")
+
+	// Update 32K entries
+	err = mapToUpdate.BulkRefreshMapEntries(newMapContents)
+	if err != nil {
+		fmt.Println("Unable to Bulk Refresh eBPF map: ", err)
+		return err
+	}
+	fmt.Println("Updated 32K entries successfully")
+
+	return nil
 }
