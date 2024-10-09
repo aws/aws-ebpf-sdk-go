@@ -91,7 +91,7 @@ func (m *bpfTc) TCIngressAttach(interfaceName string, progFD int, funcName strin
 
 	intf, err := netlink.LinkByName(interfaceName)
 	if err != nil {
-		log.Errorf("failed to find device by name %s: %w", interfaceName, err)
+		log.Errorf("failed to find device by name %s: %v", interfaceName, err)
 		return err
 	}
 
@@ -143,7 +143,7 @@ func (m *bpfTc) TCIngressDetach(interfaceName string) error {
 
 	intf, err := netlink.LinkByName(interfaceName)
 	if err != nil {
-		log.Errorf("failed to find device by name %s: %w", interfaceName, err)
+		log.Errorf("failed to find device by name %s: %v", interfaceName, err)
 		return err
 	}
 
