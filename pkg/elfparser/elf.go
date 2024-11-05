@@ -284,10 +284,21 @@ func (e *elfLoader) parseRelocationSection(reloSection *elf.Section, elfFile *el
 func (e *elfLoader) loadProg(loadedProgData map[string]ebpf_progs.CreateEBPFProgInput, loadedMaps map[string]ebpf_maps.BpfMap) (map[string]BpfData, error) {
 
 	loadedprog := make(map[string]BpfData)
+	var pinType uint32
+	for mapName, bpfMap := range loadedMaps {
+		pinType = bpfMap.MapMetaData.PinOptions.Type
+		log.Infof("Map: %s, Pin Type: %d", mapName, pinType)
+	}
 
 	for _, pgmInput := range loadedProgData {
 		bpfData := BpfData{}
-		progFD, errno := e.bpfProgApi.LoadProg(pgmInput)
+		var progFD int
+		var errno error
+		if pinType == constdef.PIN_NONE.Index() {
+			progFD, errno = e.bpfProgApi.LoadProgWithNonePinType(pgmInput, pinType)
+		} else {
+			progFD, errno = e.bpfProgApi.LoadProg(pgmInput)
+		}
 		if progFD == -1 {
 			log.Infof("Failed to load prog", "error", errno)
 			return nil, fmt.Errorf("failed to Load the prog")
