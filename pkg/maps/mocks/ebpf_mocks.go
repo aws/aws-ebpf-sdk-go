@@ -133,6 +133,21 @@ func (mr *MockBpfMapAPIsMockRecorder) DeleteMapEntry(arg0 interface{}) *gomock.C
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteMapEntry", reflect.TypeOf((*MockBpfMapAPIs)(nil).DeleteMapEntry), arg0)
 }
 
+// GetBPFmapInfo mocks base method.
+func (m *MockBpfMapAPIs) GetBPFmapInfo(arg0 uint32) (maps.BpfMapInfo, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetBPFmapInfo", arg0)
+	ret0, _ := ret[0].(maps.BpfMapInfo)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetBPFmapInfo indicates an expected call of GetBPFmapInfo.
+func (mr *MockBpfMapAPIsMockRecorder) GetBPFmapInfo(arg0 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetBPFmapInfo", reflect.TypeOf((*MockBpfMapAPIs)(nil).GetBPFmapInfo), arg0)
+}
+
 // GetFirstMapEntry mocks base method.
 func (m *MockBpfMapAPIs) GetFirstMapEntry(arg0 uintptr) error {
 	m.ctrl.T.Helper()

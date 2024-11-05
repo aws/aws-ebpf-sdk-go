@@ -17,10 +17,13 @@ package elfparser
 import (
 	"debug/elf"
 	"errors"
+	"fmt"
 	"os"
 	"sort"
 	"strings"
 	"testing"
+
+	ebpf_maps "github.com/aws/aws-ebpf-sdk-go/pkg/maps"
 
 	constdef "github.com/aws/aws-ebpf-sdk-go/pkg/constants"
 	mock_ebpf_maps "github.com/aws/aws-ebpf-sdk-go/pkg/maps/mocks"
@@ -665,6 +668,90 @@ func TestProgType(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			got := isProgTypeSupported(tt.progType)
 			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestLoadMap(t *testing.T) {
+	tests := []struct {
+		name       string
+		pinType    uint32
+		mapFD      uint32
+		mapInfo    ebpf_maps.BpfMapInfo
+		wantMapID  uint32
+		wantErr    bool
+		getInfoErr error
+		pinPath    string
+	}{
+		{
+			name:      "Successful retrieval of map info",
+			pinType:   constdef.PIN_NONE.Index(),
+			mapFD:     10,
+			mapInfo:   ebpf_maps.BpfMapInfo{Id: 12345},
+			wantMapID: 12345,
+			wantErr:   false,
+		},
+		{
+			name:       "Map retrieval error",
+			pinType:    constdef.PIN_NONE.Index(),
+			mapFD:      20,
+			getInfoErr: fmt.Errorf("failed to get map info"),
+			wantErr:    true,
+		},
+		{
+			name:      "Pinned map retrieval from path",
+			pinType:   constdef.PIN_GLOBAL_NS.Index(),
+			mapFD:     30,
+			mapInfo:   ebpf_maps.BpfMapInfo{Id: 54321},
+			wantMapID: 54321,
+			wantErr:   false,
+			pinPath:   "/sys/fs/bpf/globals/aws/maps/test_map",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			defer ctrl.Finish()
+
+			mockBpfMapAPI := mock_ebpf_maps.NewMockBpfMapAPIs(ctrl)
+			mockBpfProgAPI := mock_ebpf_progs.NewMockBpfProgAPIs(ctrl)
+
+			// Mock CreateBPFMap to return a BpfMap with MapFD set to tt.mapFD
+			mockBpfMapAPI.EXPECT().CreateBPFMap(gomock.Any()).Return(ebpf_maps.BpfMap{MapFD: tt.mapFD}, nil).AnyTimes()
+
+			// Mock GetBPFmapInfo or GetMapFromPinPath based on the pin type and error expectation
+			if tt.getInfoErr != nil {
+				mockBpfMapAPI.EXPECT().GetBPFmapInfo(tt.mapFD).Return(ebpf_maps.BpfMapInfo{}, tt.getInfoErr)
+			} else if tt.pinType == constdef.PIN_NONE.Index() {
+				mockBpfMapAPI.EXPECT().GetBPFmapInfo(tt.mapFD).Return(tt.mapInfo, nil)
+			} else {
+				mockBpfMapAPI.EXPECT().GetMapFromPinPath(tt.pinPath).Return(tt.mapInfo, nil)
+			}
+
+			// Set up the loader and the map input
+			elfLoader := &elfLoader{
+				bpfMapApi:  mockBpfMapAPI,
+				bpfProgApi: mockBpfProgAPI,
+			}
+			parsedMapData := []ebpf_maps.CreateEBPFMapInput{
+				{
+					Name:       "test_map",
+					PinOptions: &ebpf_maps.BpfMapPinOptions{Type: tt.pinType, PinPath: tt.pinPath},
+				},
+			}
+
+			loadedMaps, err := elfLoader.loadMap(parsedMapData)
+			if tt.wantErr {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+				if loadedMap, exists := loadedMaps["test_map"]; exists {
+					assert.Equal(t, tt.wantMapID, loadedMap.MapID)
+				} else {
+					t.Errorf("Expected map 'test_map' to be loaded")
+				}
+			}
 		})
 	}
 }
