@@ -175,6 +175,8 @@ type BpfMapAPIs interface {
 	BulkRefreshMapEntries(newMapContents map[string][]byte) error
 	// Retrieve map info from pin path
 	GetMapFromPinPath(pinPath string) (BpfMapInfo, error)
+	// Retrieve map info without pin path
+	GetBPFmapInfo(mapFD uint32) (BpfMapInfo, error)
 }
 
 func (m *BpfMap) CreateBPFMap(MapMetaData CreateEBPFMapInput) (BpfMap, error) {
@@ -540,6 +542,10 @@ func GetIDFromFD(mapFD int) (int, error) {
 		return -1, err
 	}
 	return int(mapInfo.Id), nil
+}
+
+func (m *BpfMap) GetBPFmapInfo(mapFD uint32) (BpfMapInfo, error) {
+	return GetBPFmapInfo(int(mapFD))
 }
 
 func GetBPFmapInfo(mapFD int) (BpfMapInfo, error) {
