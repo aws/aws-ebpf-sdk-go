@@ -1,6 +1,8 @@
 module github.com/jayanthvn/pure-gobpf/test
 
-go 1.19
+go 1.22.0
+
+toolchain go1.22.7
 
 require (
 	github.com/aws/aws-ebpf-sdk-go v0.0.0-20230616053809-009e64b9692e
