@@ -201,12 +201,20 @@ func (e *elfLoader) loadMap(parsedMapData []ebpf_maps.CreateEBPFMapInput) (map[s
 		}
 
 		//Fill ID
-		mapInfo, err := (e.bpfMapApi).GetMapFromPinPath(pinPath)
-		if err != nil {
-			return nil, fmt.Errorf("map '%s' doesn't exist", mapNameStr)
+		if loadedMaps.PinOptions.Type == constdef.PIN_NONE.Index() {
+			mapInfo, err := (e.bpfMapApi).GetBPFmapInfo(bpfMap.MapFD)
+			if err != nil {
+				return nil, fmt.Errorf("failed to get map info '%s'", mapNameStr)
+			}
+			bpfMap.MapID = uint32(mapInfo.Id)
+		} else {
+			mapInfo, err := (e.bpfMapApi).GetMapFromPinPath(pinPath)
+			if err != nil {
+				return nil, fmt.Errorf("map '%s' doesn't exist", mapNameStr)
+			}
+			mapID := uint32(mapInfo.Id)
+			bpfMap.MapID = mapID
 		}
-		mapID := uint32(mapInfo.Id)
-		bpfMap.MapID = mapID
 
 		programmedMaps[loadedMaps.Name] = bpfMap
 
@@ -279,9 +287,9 @@ func (e *elfLoader) loadProg(loadedProgData map[string]ebpf_progs.CreateEBPFProg
 
 	for _, pgmInput := range loadedProgData {
 		bpfData := BpfData{}
-		progFD, _ := e.bpfProgApi.LoadProg(pgmInput)
+		progFD, errno := e.bpfProgApi.LoadProg(pgmInput)
 		if progFD == -1 {
-			log.Infof("Failed to load prog")
+			log.Infof("Failed to load prog", "error", errno)
 			return nil, fmt.Errorf("failed to Load the prog")
 		}
 		log.Infof("loaded prog with %d", progFD)
