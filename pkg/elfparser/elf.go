@@ -690,7 +690,7 @@ func (e *elfLoader) doLoadELF(inputData BpfCustomData) (map[string]BpfData, map[
 func GetMapNameFromBPFPinPath(pinPath string) (string, string) {
 
 	splittedPinPath := strings.Split(pinPath, "/")
-	lastSegment := splittedPinPath[len(splittedPinPath)-1] 
+	lastSegment := splittedPinPath[len(splittedPinPath)-1]
 	// Split at the first occurrence of "_"
 	mapNamespace, mapName, _ := strings.Cut(lastSegment, "_")
 	log.Infof("Found Identified - %s : %s", mapNamespace, mapName)
