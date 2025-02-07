@@ -690,23 +690,14 @@ func (e *elfLoader) doLoadELF(inputData BpfCustomData) (map[string]BpfData, map[
 func GetMapNameFromBPFPinPath(pinPath string) (string, string) {
 
 	splittedPinPath := strings.Split(pinPath, "/")
-	podIdentifier := strings.SplitN(splittedPinPath[len(splittedPinPath)-1], "_", 2)
-	log.Infof("Found Identified - %s : %s", podIdentifier[0], podIdentifier[1])
+	lastSegment := splittedPinPath[len(splittedPinPath)-1] 
+	// Split at the first occurrence of "_"
+	mapNamespace, mapName, _ := strings.Cut(lastSegment, "_")
+	log.Infof("Found Identified - %s : %s", mapNamespace, mapName)
 
-	mapNamespace := podIdentifier[0]
-	mapName := podIdentifier[1]
-
-	log.Infof("Found ->  ", mapNamespace, mapName)
-
-	directionIdentifier := strings.Split(splittedPinPath[len(splittedPinPath)-1], "_")
-	direction := directionIdentifier[1]
-
-	if direction == "ingress" {
-		log.Infof("Adding ingress_map -> ", mapNamespace)
-		return "ingress_map", mapNamespace
-	} else if direction == "egress" {
-		log.Infof("Adding egress_map -> ", mapNamespace)
-		return "egress_map", mapNamespace
+	if mapName == "ingress_map" || mapName == "egress_map" || mapName == "ingress_pod_state_map" || mapName == "egress_pod_state_map" {
+		log.Infof("Adding %s -> %s", mapName, mapNamespace)
+		return mapName, mapNamespace
 	}
 
 	//This is global map, we cannot use global since there are multiple maps
