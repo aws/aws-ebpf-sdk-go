@@ -707,7 +707,7 @@ func GetMapNameFromBPFPinPath(pinPath string) (string, string) {
 
 func IsMapGlobal(pinPath string) bool {
 	mapName, _ := GetMapNameFromBPFPinPath(pinPath)
-	if mapName == "ingress_map" || mapName == "egress_map" {
+	if mapName == "ingress_map" || mapName == "egress_map" || mapName == "ingress_pod_state_map" || mapName == "egress_pod_state_map" {
 		return false
 	}
 	return true
