@@ -35,6 +35,7 @@ type BpfProgAPIs interface {
 	PinProg(progFD uint32, pinPath string) error
 	UnPinProg(pinPath string) error
 	LoadProg(progMetaData CreateEBPFProgInput) (int, error)
+	LoadProgWithNonePinType(progMetaData CreateEBPFProgInput, pinType uint32) (int, error)
 	GetProgFromPinPath(pinPath string) (BpfProgInfo, int, error)
 	GetBPFProgAssociatedMapsIDs(progFD int) ([]uint32, error)
 }
@@ -194,7 +195,14 @@ func parseLogs(log []byte) []string {
 }
 
 func (m *BpfProgram) LoadProg(progMetaData CreateEBPFProgInput) (int, error) {
+	fdInt, err := m.LoadProgWithNonePinType(progMetaData, uint32(0))
+	if err != nil {
+		return -1, err
+	}
+	return fdInt, nil
+}
 
+func (m *BpfProgram) LoadProgWithNonePinType(progMetaData CreateEBPFProgInput, pinType uint32) (int, error) {
 	var prog_type uint32
 	switch progMetaData.ProgType {
 	case "xdp":
@@ -244,10 +252,12 @@ func (m *BpfProgram) LoadProg(progMetaData CreateEBPFProgInput) (int, error) {
 	}
 
 	//Pin the prog
-	err := m.PinProg(uint32(fd), progMetaData.PinPath)
-	if err != nil {
-		log.Errorf("pin prog failed %v", err)
-		return -1, err
+	if pinType != constdef.PIN_NONE.Index() {
+		err := m.PinProg(uint32(fd), progMetaData.PinPath)
+		if err != nil {
+			log.Errorf("pin prog failed %v", err)
+			return -1, err
+		}
 	}
 	return int(fd), nil
 }
