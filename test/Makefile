@@ -13,7 +13,7 @@ build-test:    ## Build the VPC CNI plugin agent using the host's Go toolchain.
 # Build BPF
 CLANG := clang
 CLANG_INCLUDE := -I../../..
-CFLAGS := -g -O2 -Wall -fpie -target bpf -DCORE -D__BPF_TRACING__ -march=bpf -D__TARGET_ARCH_$(ARCH)
+CFLAGS := -g -O2 -Wall -fpie -target bpf -DCORE -D__BPF_TRACING__ -D__TARGET_ARCH_$(ARCH)
 SRCDIR := c
 TARGETS := $(patsubst %.c, %.elf, $(shell find $(SRCDIR) -type f -name "*.c"))
 
