@@ -297,7 +297,7 @@ func TestLoadTCfilter() error {
 	tcProg := progInfo["/sys/fs/bpf/globals/aws/programs/test_handle_ingress"].Program
 	progFD := tcProg.ProgFD
 
-	gosdkTcClient := ebpf_tc.New("lo")
+	gosdkTcClient := ebpf_tc.New([]string{"lo"})
 
 	fmt.Println("Try Attach ingress probe")
 	err = gosdkTcClient.TCIngressAttach("lo", int(progFD), "ingress_test")
