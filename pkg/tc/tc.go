@@ -43,10 +43,10 @@ type BpfTc interface {
 var _ BpfTc = &bpfTc{}
 
 type bpfTc struct {
-	InterfacePrefix string
+	InterfacePrefix []string
 }
 
-func New(interfacePrefix string) BpfTc {
+func New(interfacePrefix []string) BpfTc {
 	return &bpfTc{
 		InterfacePrefix: interfacePrefix,
 	}
@@ -76,12 +76,16 @@ func enableQdisc(link netlink.Link) bool {
 
 }
 
-func mismatchedInterfacePrefix(interfaceName string, interfacePrefix string) error {
-	if !strings.HasPrefix(interfaceName, interfacePrefix) {
-		log.Errorf("expected prefix - %s but got %s", interfacePrefix, interfaceName)
-		return errors.New("Mismatched initialized prefix name and passed interface name")
+func mismatchedInterfacePrefix(interfaceName string, interfacePrefix []string) error {
+
+	for _, prefix := range interfacePrefix {
+		if strings.HasPrefix(interfaceName, prefix) {
+			return nil
+		}
 	}
-	return nil
+
+	log.Errorf("expected prefix - %s but got %s", interfacePrefix, interfaceName)
+	return errors.New("Mismatched initialized prefix name and passed interface name")
 }
 
 func (m *bpfTc) TCIngressAttach(interfaceName string, progFD int, funcName string) error {
@@ -262,7 +266,7 @@ func (m *bpfTc) TCEgressDetach(interfaceName string) error {
 
 func (m *bpfTc) CleanupQdiscs(ingressCleanup bool, egressCleanup bool) error {
 
-	if m.InterfacePrefix == "" {
+	if len(m.InterfacePrefix) == 0 {
 		log.Errorf("invalid empty prefix")
 		return nil
 	}
@@ -275,7 +279,7 @@ func (m *bpfTc) CleanupQdiscs(ingressCleanup bool, egressCleanup bool) error {
 
 	for _, link := range linkList {
 		linkName := link.Attrs().Name
-		if strings.HasPrefix(linkName, m.InterfacePrefix) {
+		if err := mismatchedInterfacePrefix(linkName, m.InterfacePrefix); err == nil {
 			if ingressCleanup {
 				log.Infof("Trying to cleanup ingress on %s", linkName)
 				err = m.TCIngressDetach(linkName)
@@ -323,7 +327,7 @@ func (m *bpfTc) getAttachedProgId(link netlink.Link, filterParent uint32) int {
 
 func (m *bpfTc) GetAllAttachedProgIds() (map[string]int, map[string]int, error) {
 
-	if m.InterfacePrefix == "" {
+	if len(m.InterfacePrefix) == 0 {
 		log.Errorf("invalid empty prefix")
 		return nil, nil, fmt.Errorf("Invalid empty prefix")
 	}
@@ -341,7 +345,7 @@ func (m *bpfTc) GetAllAttachedProgIds() (map[string]int, map[string]int, error) 
 		log.Infof("link name %s", linkName)
 		ingressProgId := 0
 		egressProgId := 0
-		if strings.HasPrefix(linkName, m.InterfacePrefix) {
+		if err := mismatchedInterfacePrefix(linkName, m.InterfacePrefix); err == nil {
 			// Get ingress ID attached
 			filterParent := uint32(netlink.HANDLE_MIN_INGRESS)
 			ingressProgId = m.getAttachedProgId(link, filterParent)
