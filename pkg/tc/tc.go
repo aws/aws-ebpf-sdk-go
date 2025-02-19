@@ -37,15 +37,16 @@ type BpfTc interface {
 	TCEgressAttach(interfaceName string, progFD int, funcName string) error
 	TCEgressDetach(interfaceName string) error
 	CleanupQdiscs(ingressCleanup bool, egressCleanup bool) error
+	GetAllAttachedProgIds() (map[string]int, map[string]int, error)
 }
 
 var _ BpfTc = &bpfTc{}
 
 type bpfTc struct {
-	InterfacePrefix string
+	InterfacePrefix []string
 }
 
-func New(interfacePrefix string) BpfTc {
+func New(interfacePrefix []string) BpfTc {
 	return &bpfTc{
 		InterfacePrefix: interfacePrefix,
 	}
@@ -75,12 +76,16 @@ func enableQdisc(link netlink.Link) bool {
 
 }
 
-func mismatchedInterfacePrefix(interfaceName string, interfacePrefix string) error {
-	if !strings.HasPrefix(interfaceName, interfacePrefix) {
-		log.Errorf("expected prefix - %s but got %s", interfacePrefix, interfaceName)
-		return errors.New("Mismatched initialized prefix name and passed interface name")
+func mismatchedInterfacePrefix(interfaceName string, interfacePrefix []string) error {
+
+	for _, prefix := range interfacePrefix {
+		if strings.HasPrefix(interfaceName, prefix) {
+			return nil
+		}
 	}
-	return nil
+
+	log.Errorf("expected prefix - %s but got %s", interfacePrefix, interfaceName)
+	return errors.New("Mismatched initialized prefix name and passed interface name")
 }
 
 func (m *bpfTc) TCIngressAttach(interfaceName string, progFD int, funcName string) error {
@@ -261,7 +266,7 @@ func (m *bpfTc) TCEgressDetach(interfaceName string) error {
 
 func (m *bpfTc) CleanupQdiscs(ingressCleanup bool, egressCleanup bool) error {
 
-	if m.InterfacePrefix == "" {
+	if len(m.InterfacePrefix) == 0 {
 		log.Errorf("invalid empty prefix")
 		return nil
 	}
@@ -274,7 +279,7 @@ func (m *bpfTc) CleanupQdiscs(ingressCleanup bool, egressCleanup bool) error {
 
 	for _, link := range linkList {
 		linkName := link.Attrs().Name
-		if strings.HasPrefix(linkName, m.InterfacePrefix) {
+		if err := mismatchedInterfacePrefix(linkName, m.InterfacePrefix); err == nil {
 			if ingressCleanup {
 				log.Infof("Trying to cleanup ingress on %s", linkName)
 				err = m.TCIngressDetach(linkName)
@@ -297,4 +302,66 @@ func (m *bpfTc) CleanupQdiscs(ingressCleanup bool, egressCleanup bool) error {
 		}
 	}
 	return nil
+}
+
+func (m *bpfTc) getAttachedProgId(link netlink.Link, filterParent uint32) int {
+	linkName := link.Attrs().Name
+	filters, err := netlink.FilterList(link, filterParent)
+	if err != nil {
+		log.Errorf("failed to list filters for: %s ", linkName, err)
+	}
+	progId := 0
+	filterHandle := uint32(constdef.DEFAULT_BPF_FILTER_HANDLE)
+	// You will only have one filter for a handle
+	for _, filter := range filters {
+		if filter.Attrs().Handle == filterHandle {
+			bpf, ok := filter.(*netlink.BpfFilter)
+			if !ok {
+				continue
+			}
+			progId = int(bpf.Id)
+		}
+	}
+	return progId
+}
+
+func (m *bpfTc) GetAllAttachedProgIds() (map[string]int, map[string]int, error) {
+
+	if len(m.InterfacePrefix) == 0 {
+		log.Errorf("invalid empty prefix")
+		return nil, nil, fmt.Errorf("Invalid empty prefix")
+	}
+
+	linkList, err := netlink.LinkList()
+	if err != nil {
+		log.Errorf("unable to get link list")
+		return nil, nil, err
+	}
+
+	interfaceToIngressProgId := make(map[string]int)
+	interfaceToEgressProgId := make(map[string]int)
+	for _, link := range linkList {
+		linkName := link.Attrs().Name
+		log.Infof("link name %s", linkName)
+		ingressProgId := 0
+		egressProgId := 0
+		if err := mismatchedInterfacePrefix(linkName, m.InterfacePrefix); err == nil {
+			// Get ingress ID attached
+			filterParent := uint32(netlink.HANDLE_MIN_INGRESS)
+			ingressProgId = m.getAttachedProgId(link, filterParent)
+			log.Infof("Got ingress progId %d", ingressProgId)
+			if ingressProgId > 0 {
+				interfaceToIngressProgId[linkName] = ingressProgId
+			}
+
+			// Get egress ID attached
+			filterParent = uint32(netlink.HANDLE_MIN_EGRESS)
+			egressProgId = m.getAttachedProgId(link, filterParent)
+			log.Infof("Got egress progId %d", egressProgId)
+			if egressProgId > 0 {
+				interfaceToEgressProgId[linkName] = egressProgId
+			}
+		}
+	}
+	return interfaceToIngressProgId, interfaceToEgressProgId, nil
 }
