@@ -42,7 +42,7 @@ type testMocks struct {
 	tcClient   BpfTc
 }
 
-func setup(t *testing.T, testPath string, interfacePrefix string) *testMocks {
+func setup(t *testing.T, testPath string, interfacePrefix []string) *testMocks {
 	ctrl := gomock.NewController(t)
 	return &testMocks{
 		path:       testPath,
@@ -97,7 +97,7 @@ func teardownTest(interfaceNames []string, t *testing.T) {
 }
 
 func TestMismatchedPrefixName(t *testing.T) {
-	m := setup(t, "../../test-data/tc.bpf.elf", "eni")
+	m := setup(t, "../../test-data/tc.bpf.elf", []string{"eni", "vlan"})
 	defer m.ctrl.Finish()
 
 	tests := []struct {
@@ -115,12 +115,17 @@ func TestMismatchedPrefixName(t *testing.T) {
 			interfaceName: "fni1",
 			wantErr:       errors.New("Mismatched initialized prefix name and passed interface name"),
 		},
+		{
+			name:          "Test Mismatched Prefix",
+			interfaceName: "vlan1",
+			wantErr:       nil,
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 
-			err := mismatchedInterfacePrefix(tt.interfaceName, "eni")
+			err := mismatchedInterfacePrefix(tt.interfaceName, []string{"eni", "vlan"})
 			if tt.wantErr != nil {
 				assert.EqualError(t, err, tt.wantErr.Error())
 			} else {
@@ -135,7 +140,7 @@ func TestTCIngressAttachDetach(t *testing.T) {
 		t.Skip("Test requires root privileges.")
 	}
 
-	m := setup(t, "../../test-data/tc.bpf.elf", "f")
+	m := setup(t, "../../test-data/tc.bpf.elf", []string{"f"})
 	defer m.ctrl.Finish()
 
 	interfaceName := "foo"
@@ -174,7 +179,7 @@ func TestTCEgressAttachDetach(t *testing.T) {
 		t.Skip("Test requires root privileges.")
 	}
 
-	m := setup(t, "../../test-data/tc.bpf.elf", "f")
+	m := setup(t, "../../test-data/tc.bpf.elf", []string{"f"})
 	defer m.ctrl.Finish()
 
 	interfaceName := "foo"
@@ -215,15 +220,15 @@ func TestQdiscCleanup(t *testing.T) {
 		t.Skip("Test requires root privileges.")
 	}
 
-	m := setup(t, "../../test-data/tc.bpf.elf", "eni")
+	m := setup(t, "../../test-data/tc.bpf.elf", []string{"eni", "vlan"})
 	defer m.ctrl.Finish()
 
 	interfaceName1 := "eni1"
 	interfaceName2 := "eni2"
+	interfaceName3 := "vlan1"
 
 	var interfaceNames []string
-	interfaceNames = append(interfaceNames, interfaceName1)
-	interfaceNames = append(interfaceNames, interfaceName2)
+	interfaceNames = append(interfaceNames, interfaceName1, interfaceName2, interfaceName3)
 
 	setupTest(interfaceNames, t)
 	defer teardownTest(interfaceNames, t)
@@ -283,7 +288,7 @@ func TestNetLinkAPIs(t *testing.T) {
 
 	for _, tt := range netLinktests {
 		t.Run(tt.name, func(t *testing.T) {
-			m := setup(t, "../../test-data/tc.bpf.elf", "eni")
+			m := setup(t, "../../test-data/tc.bpf.elf", []string{"eni", "vlan"})
 			defer m.ctrl.Finish()
 
 			var interfaceNames []string
