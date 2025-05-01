@@ -1,15 +1,14 @@
 module github.com/aws/aws-ebpf-sdk-go
 
 go 1.22.0
-
-toolchain go1.22.7
+toolchain go1.24.1
 
 require (
 	github.com/golang/mock v1.6.0
 	github.com/stretchr/testify v1.10.0
 	github.com/vishvananda/netlink v1.3.0
 	go.uber.org/zap v1.27.0
-	golang.org/x/sys v0.30.0
+	golang.org/x/sys v0.32.0
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1
 )
 
