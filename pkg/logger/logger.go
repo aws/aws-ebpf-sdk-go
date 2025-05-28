@@ -26,9 +26,10 @@ import (
 
 const (
 	defaultLogFilePath = "/var/log/aws-routed-eni/ebpf-sdk.log"
-	defaultLogLevel    = "Debug"
-	envLogLevel        = "AWS_EBPF_SDK_LOGLEVEL"
-	envLogFilePath     = "AWS_EBPF_SDK_LOG_FILE"
+	// todo - check which log lines are polluting and convert them to debug level
+	defaultLogLevel = "Info"
+	envLogLevel     = "AWS_EBPF_SDK_LOGLEVEL"
+	envLogFilePath  = "AWS_EBPF_SDK_LOG_FILE"
 )
 
 // Log is global variable so that log functions can be directly accessed
