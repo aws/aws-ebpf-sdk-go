@@ -363,7 +363,7 @@ func (m *BpfMap) GetNextMapEntry(key, nextKey uintptr) error {
 		return fmt.Errorf("unable to get next map entry: %s", errno)
 	}
 
-	log.Debugf("Got next map entry with fd : %d and err %s", int(ret), errno)
+	log.Debugf("Got next map entry with ret: %d", int(ret))
 	return nil
 }
 
@@ -377,7 +377,7 @@ func (m *BpfMap) GetAllMapKeys() ([]string, error) {
 	err := m.GetFirstMapEntry(uintptr(unsafe.Pointer(&curKey[0])))
 	if errors.Is(err, unix.ENOENT) {
 		log.Info("No Entries found, Empty map")
-		return nil, err
+		return []string{}, nil
 	}
 	if err != nil {
 		log.Errorf("unable to get first key %s", err)
@@ -422,7 +422,7 @@ func (m *BpfMap) GetMapEntry(key, value uintptr) error {
 		return fmt.Errorf("unable to get next map entry: %s", errno)
 	}
 
-	log.Debugf("Got map entry with fd : %d and err %s", int(ret), errno)
+	log.Debugf("Got map entry with ret: %d", int(ret))
 	return nil
 }
 
@@ -647,7 +647,7 @@ func GetNextMapEntryByID(key, nextKey uintptr, mapID int) error {
 		return fmt.Errorf("unable to get next map entry: %s", errno)
 	}
 
-	log.Debugf("Got next map entry with fd : %d and err %s", int(ret), errno)
+	log.Debugf("Got next map entry with ret: %d", int(ret))
 	return nil
 }
 
@@ -677,6 +677,6 @@ func GetMapEntryByID(key, value uintptr, mapID int) error {
 		return fmt.Errorf("unable to get next map entry: %s", errno)
 	}
 
-	log.Debugf("Got map entry with ret : %d and err %s", int(ret), errno)
+	log.Debugf("Got map entry with ret : %d", int(ret))
 	return nil
 }
