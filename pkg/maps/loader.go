@@ -309,7 +309,7 @@ func (m *BpfMap) CreateUpdateMapEntry(key, value uintptr, updateFlags uint64) er
 		return fmt.Errorf("unable to update map: %s", errno)
 	}
 
-	log.Debugf("Create/Update map entry done with fd : %d and err %s", int(ret), errno)
+	log.Debugf("Create/Update map entry done with ret : %d", int(ret))
 	return nil
 }
 
@@ -331,7 +331,7 @@ func (m *BpfMap) DeleteMapEntry(key uintptr) error {
 		return fmt.Errorf("unable to update map: %s", errno)
 	}
 
-	log.Debugf("Delete map entry done with fd : %d and err %s", int(ret), errno)
+	log.Debugf("Delete map entry done with ret : %d", int(ret))
 	return nil
 }
 
