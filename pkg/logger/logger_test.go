@@ -61,7 +61,7 @@ func TestLogLevelReturnsOverriddenLevel(t *testing.T) {
 }
 
 func TestLogLevelReturnsDefaultLevelWhenEnvNotSet(t *testing.T) {
-	expectedLogLevel := zapcore.DebugLevel
+	expectedLogLevel := zapcore.InfoLevel
 	inputLogLevel := GetLogLevel()
 	assert.Equal(t, expectedLogLevel, getZapLevel(inputLogLevel))
 }
