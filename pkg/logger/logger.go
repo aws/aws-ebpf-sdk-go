@@ -26,7 +26,7 @@ import (
 
 const (
 	defaultLogFilePath = "/var/log/aws-routed-eni/ebpf-sdk.log"
-	defaultLogLevel    = "Debug"
+	defaultLogLevel    = "Info"
 	envLogLevel        = "AWS_EBPF_SDK_LOGLEVEL"
 	envLogFilePath     = "AWS_EBPF_SDK_LOG_FILE"
 )
