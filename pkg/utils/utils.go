@@ -169,7 +169,7 @@ func GetProgFDFromID(mapID int) (int, error) {
 		unsafe.Sizeof(attr),
 	)
 	if errno != 0 {
-		log.Infof("Failed to get Map FD - ret %d and err %s", int(ret), errno)
+		log.Infof("Failed to get Prog FD - ret %d and err %s", int(ret), errno)
 		return 0, errno
 	}
 	fd := int(ret)
