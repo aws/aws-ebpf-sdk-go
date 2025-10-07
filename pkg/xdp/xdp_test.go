@@ -130,6 +130,9 @@ func TestTCXdpAttachDetach(t *testing.T) {
 }
 
 func TestNetLinkAPIs(t *testing.T) {
+	if os.Getuid() != 0 {
+		t.Skip("Test requires root privileges to create network interfaces and attach BPF programs.")
+	}
 
 	netLinktests := []struct {
 		name          string
