@@ -635,31 +635,31 @@ func (e *elfLoader) doLoadELF(inputData BpfCustomData) (map[string]BpfData, map[
 	//Parse all sections
 	if err := e.parseSection(); err != nil {
 		fmt.Println(err)
-		return nil, nil, fmt.Errorf("failed to parse sections in elf file")
+		return nil, nil, fmt.Errorf("failed to parse sections in elf file %w", err)
 	}
 
 	//Parse Map
 	parsedMapData, err := e.parseMap(inputData)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to parse maps")
+		return nil, nil, fmt.Errorf("failed to parse maps %w", err)
 	}
 
 	//Load Map
 	loadedMapData, err := e.loadMap(parsedMapData)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to load maps")
+		return nil, nil, fmt.Errorf("failed to load maps %w", err)
 	}
 
 	//Parse Prog, need to pass loadedMapData for applying relocation
 	parsedProgData, err := e.parseProg(loadedMapData)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to parse prog")
+		return nil, nil, fmt.Errorf("failed to parse prog %w", err)
 	}
 
 	//Load prog
 	loadedProgData, err := e.loadProg(parsedProgData, loadedMapData)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to load progs")
+		return nil, nil, fmt.Errorf("failed to load progs %w", err)
 	}
 
 	//Link loaded map with prog
