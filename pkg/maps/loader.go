@@ -304,6 +304,11 @@ func (m *BpfMap) CreateUpdateMapEntry(key, value uintptr, updateFlags uint64) er
 	runtime.KeepAlive(key)
 	runtime.KeepAlive(value)
 
+	if updateFlags == uint64(constdef.BPF_NOEXIST) && errno == unix.EEXIST {
+		log.Infof("map entry already exists, cannot create duplicate")
+		return nil
+	}
+
 	if errno != 0 {
 		log.Errorf("unable to create/update map entry and ret %d and err %s", int(ret), errno)
 		return fmt.Errorf("unable to update map: %s", errno)
