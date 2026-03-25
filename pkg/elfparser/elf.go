@@ -635,31 +635,31 @@ func (e *elfLoader) doLoadELF(inputData BpfCustomData) (map[string]BpfData, map[
 	//Parse all sections
 	if err := e.parseSection(); err != nil {
 		fmt.Println(err)
-		return nil, nil, fmt.Errorf("failed to parse sections in elf file")
+		return nil, nil, fmt.Errorf("failed to parse sections in elf file %w", err)
 	}
 
 	//Parse Map
 	parsedMapData, err := e.parseMap(inputData)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to parse maps")
+		return nil, nil, fmt.Errorf("failed to parse maps %w", err)
 	}
 
 	//Load Map
 	loadedMapData, err := e.loadMap(parsedMapData)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to load maps")
+		return nil, nil, fmt.Errorf("failed to load maps %w", err)
 	}
 
 	//Parse Prog, need to pass loadedMapData for applying relocation
 	parsedProgData, err := e.parseProg(loadedMapData)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to parse prog")
+		return nil, nil, fmt.Errorf("failed to parse prog %w", err)
 	}
 
 	//Load prog
 	loadedProgData, err := e.loadProg(parsedProgData, loadedMapData)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to load progs")
+		return nil, nil, fmt.Errorf("failed to load progs %w", err)
 	}
 
 	//Link loaded map with prog
@@ -687,30 +687,33 @@ func (e *elfLoader) doLoadELF(inputData BpfCustomData) (map[string]BpfData, map[
 	return loadedProgData, loadedMapData, nil
 }
 
-func GetMapNameFromBPFPinPath(pinPath string) (string, string) {
+func isNamespacedMap(mapName string) bool {
+	switch mapName {
+	case "ingress_map", "egress_map", "ingress_pod_state_map", "egress_pod_state_map", "cp_ingress_map", "cp_egress_map", "ipcache_map":
+		return true
+	default:
+		return false
+	}
+}
 
+func GetMapNameFromBPFPinPath(pinPath string) (string, string) {
 	splittedPinPath := strings.Split(pinPath, "/")
 	lastSegment := splittedPinPath[len(splittedPinPath)-1]
-	// Split at the first occurrence of "_"
 	mapNamespace, mapName, _ := strings.Cut(lastSegment, "_")
 	log.Infof("Found Identified - %s : %s", mapNamespace, mapName)
 
-	if mapName == "ingress_map" || mapName == "egress_map" || mapName == "ingress_pod_state_map" || mapName == "egress_pod_state_map" {
+	if isNamespacedMap(mapName) {
 		log.Infof("Adding %s -> %s", mapName, mapNamespace)
 		return mapName, mapNamespace
 	}
 
-	//This is global map, we cannot use global since there are multiple maps
 	log.Infof("Adding GLOBAL %s -> %s", mapName, mapName)
 	return mapName, mapName
 }
 
 func IsMapGlobal(pinPath string) bool {
 	mapName, _ := GetMapNameFromBPFPinPath(pinPath)
-	if mapName == "ingress_map" || mapName == "egress_map" || mapName == "ingress_pod_state_map" || mapName == "egress_pod_state_map" {
-		return false
-	}
-	return true
+	return !isNamespacedMap(mapName)
 }
 
 func (b *bpfSDKClient) RecoverGlobalMaps() (map[string]ebpf_maps.BpfMap, error) {
