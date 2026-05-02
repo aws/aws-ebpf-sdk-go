@@ -132,7 +132,7 @@ func (m *bpfTc) TCIngressAttach(interfaceName string, progFD int, funcName strin
 		DirectAction: true,
 	}
 
-	if err = netlink.FilterAdd(filter); err != nil {
+	if err = netlink.FilterReplace(filter); err != nil {
 		log.Errorf("while loading ingress program %q on fd %d: %v", "handle ingress", progFD, err)
 		return err
 	}
@@ -220,7 +220,7 @@ func (m *bpfTc) TCEgressAttach(interfaceName string, progFD int, funcName string
 		DirectAction: true,
 	}
 
-	if err = netlink.FilterAdd(filter); err != nil {
+	if err = netlink.FilterReplace(filter); err != nil {
 		log.Errorf("while loading egress program %q on fd %d: %v", "handle egress", progFD, err)
 		return err
 	}
