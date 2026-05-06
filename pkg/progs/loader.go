@@ -435,6 +435,10 @@ func (attr *BpfObjGet) BpfGetObject() (int, error) {
 }
 
 func (m *BpfProgram) GetProgFromPinPath(pinPath string) (BpfProgInfo, int, error) {
+	return GetProgFromPinPath(pinPath)
+}
+
+func GetProgFromPinPath(pinPath string) (BpfProgInfo, int, error) {
 	log.Infof("Printing pinpath - %s ", pinPath)
 	if len(pinPath) == 0 {
 		return BpfProgInfo{}, -1, fmt.Errorf("invalid pinPath")

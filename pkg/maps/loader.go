@@ -591,6 +591,10 @@ func (attr *BpfObjGet) BpfGetObject() (int, error) {
 }
 
 func (m *BpfMap) GetMapFromPinPath(pinPath string) (BpfMapInfo, error) {
+	return GetMapFromPinPath(pinPath)
+}
+
+func GetMapFromPinPath(pinPath string) (BpfMapInfo, error) {
 	if len(pinPath) == 0 {
 		return BpfMapInfo{}, fmt.Errorf("invalid pinPath")
 	}

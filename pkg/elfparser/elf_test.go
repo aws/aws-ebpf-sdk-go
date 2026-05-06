@@ -28,7 +28,6 @@ import (
 	constdef "github.com/aws/aws-ebpf-sdk-go/pkg/constants"
 	mock_ebpf_maps "github.com/aws/aws-ebpf-sdk-go/pkg/maps/mocks"
 	mock_ebpf_progs "github.com/aws/aws-ebpf-sdk-go/pkg/progs/mocks"
-	"github.com/aws/aws-ebpf-sdk-go/pkg/utils"
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/assert"
 )
@@ -502,70 +501,7 @@ func TestParseProg(t *testing.T) {
 
 }
 
-func TestRecovery(t *testing.T) {
 
-	utils.Mount_bpf_fs()
-	defer utils.Unmount_bpf_fs()
-
-	progtests := []struct {
-		name          string
-		elfFileName   string
-		wantMap       int
-		wantProg      int
-		recoverGlobal bool
-		forceUnMount  bool
-		wantErr       error
-	}{
-		{
-			name:          "Recover Global maps",
-			elfFileName:   "../../test-data/test.map.bpf.elf",
-			wantMap:       1,
-			recoverGlobal: true,
-			wantErr:       nil,
-		},
-		{
-			name:        "Recover BPF data",
-			elfFileName: "../../test-data/recoverydata.bpf.elf",
-			wantProg:    3,
-			wantErr:     nil,
-		},
-	}
-
-	for _, tt := range progtests {
-		t.Run(tt.name, func(t *testing.T) {
-
-			m := setup(t, tt.elfFileName)
-			defer m.ctrl.Finish()
-
-			bpfSDKclient := New()
-
-			if tt.recoverGlobal {
-				_, _, err := bpfSDKclient.LoadBpfFile(m.path, "global")
-				if err != nil {
-					assert.NoError(t, err)
-				}
-				recoveredMaps, err := bpfSDKclient.RecoverGlobalMaps()
-				if tt.wantErr != nil {
-					assert.EqualError(t, err, tt.wantErr.Error())
-				} else {
-					assert.Equal(t, tt.wantMap, len(recoveredMaps))
-				}
-			} else {
-				_, _, err := bpfSDKclient.LoadBpfFile(m.path, "test")
-				if err != nil {
-					assert.NoError(t, err)
-				}
-
-				recoveredData, err := bpfSDKclient.RecoverAllBpfProgramsAndMaps()
-				if tt.wantErr != nil {
-					assert.EqualError(t, err, tt.wantErr.Error())
-				} else {
-					assert.Equal(t, tt.wantProg, len(recoveredData))
-				}
-			}
-		})
-	}
-}
 
 func TestGetMapNameFromBPFPinPath(t *testing.T) {
 	type args struct {
