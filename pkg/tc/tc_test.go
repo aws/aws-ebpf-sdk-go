@@ -262,6 +262,9 @@ func TestQdiscCleanup(t *testing.T) {
 }
 
 func TestNetLinkAPIs(t *testing.T) {
+	if os.Getuid() != 0 {
+		t.Skip("Test requires root privileges to create network interfaces and attach BPF programs.")
+	}
 
 	netLinktests := []struct {
 		name          string
@@ -301,6 +304,7 @@ func TestNetLinkAPIs(t *testing.T) {
 			m.ebpf_progs.EXPECT().LoadProg(gomock.Any()).AnyTimes()
 			m.ebpf_maps.EXPECT().PinMap(gomock.Any(), gomock.Any()).AnyTimes()
 			m.ebpf_maps.EXPECT().GetMapFromPinPath(gomock.Any()).AnyTimes()
+			m.ebpf_maps.EXPECT().GetBPFmapInfo(gomock.Any()).AnyTimes()
 			m.ebpf_progs.EXPECT().GetProgFromPinPath(gomock.Any()).AnyTimes()
 			m.ebpf_progs.EXPECT().GetBPFProgAssociatedMapsIDs(gomock.Any()).AnyTimes()
 
