@@ -272,10 +272,17 @@ func (m *BpfMap) UnPinMap(pinPath string) error {
 		return err
 	}
 	if m.MapFD <= 0 {
-		log.Errorf("map FD is invalid or closed %d", m.MapFD)
+		log.Debugf("map FD is invalid or already closed %d", m.MapFD)
 		return nil
 	}
-	return unix.Close(int(m.MapFD))
+	// Zero MapFD before closing so a second call to UnPinMap on the same struct
+	// is a no-op instead of closing a fd the kernel has since reassigned to an
+	// unrelated open file in the same process. Without this, callers that retain
+	// the BpfMap reference (e.g. agents that cache map handles across reconciles)
+	// can corrupt arbitrary file descriptors held elsewhere in the process.
+	fd := m.MapFD
+	m.MapFD = 0
+	return unix.Close(int(fd))
 }
 
 func (m *BpfMap) CreateMapEntry(key, value uintptr) error {

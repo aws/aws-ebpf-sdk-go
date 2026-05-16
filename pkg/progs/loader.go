@@ -181,10 +181,16 @@ func (m *BpfProgram) UnPinProg(pinPath string) error {
 		return err
 	}
 	if m.ProgFD <= 0 {
-		log.Errorf("map FD is invalid or closed %d", m.ProgFD)
+		log.Debugf("prog FD is invalid or already closed %d", m.ProgFD)
 		return nil
 	}
-	return unix.Close(int(m.ProgFD))
+	// Zero ProgFD before closing so a second call to UnPinProg on the same struct
+	// is a no-op instead of closing a fd the kernel has since reassigned to an
+	// unrelated open file in the same process. See pkg/maps/loader.go UnPinMap
+	// for the equivalent fix on BpfMap.
+	fd := m.ProgFD
+	m.ProgFD = 0
+	return unix.Close(fd)
 }
 
 func parseLogs(log []byte) []string {
