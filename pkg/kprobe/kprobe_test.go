@@ -66,7 +66,7 @@ func TestTCKprobeAttachDetach(t *testing.T) {
 	m.ebpf_progs.EXPECT().GetProgFromPinPath(gomock.Any()).AnyTimes()
 	m.ebpf_progs.EXPECT().GetBPFProgAssociatedMapsIDs(gomock.Any()).AnyTimes()
 
-	bpfSDKclient := elfparser.New()
+	bpfSDKclient := elfparser.New(elfparser.Config{})
 	progInfo, _, err := bpfSDKclient.LoadBpfFile(m.path, DUMMY_PROG_NAME)
 	if err != nil {
 		assert.NoError(t, err)
@@ -105,7 +105,7 @@ func TestTCKretprobeAttachDetach(t *testing.T) {
 	m.ebpf_progs.EXPECT().GetProgFromPinPath(gomock.Any()).AnyTimes()
 	m.ebpf_progs.EXPECT().GetBPFProgAssociatedMapsIDs(gomock.Any()).AnyTimes()
 
-	bpfSDKclient := elfparser.New()
+	bpfSDKclient := elfparser.New(elfparser.Config{})
 	progInfo, _, err := bpfSDKclient.LoadBpfFile(m.path, DUMMY_PROG_NAME)
 	if err != nil {
 		assert.NoError(t, err)

@@ -46,6 +46,13 @@ var (
 
 var log = logger.Get()
 var sdkCache = cache.Get()
+var namespacedMaps map[string]struct{}
+
+// Config carries SDK construction options. NamespacedMaps lists BPF map names
+// that should be treated as per-namespace (per-pod-identifier) rather than global
+type Config struct {
+	NamespacedMaps []string
+}
 
 type BpfSDKClient interface {
 	IncreaseRlimit() error
@@ -98,7 +105,11 @@ type elfLoader struct {
 	progSectionMap map[uint32]progEntry
 }
 
-func New() BpfSDKClient {
+func New(cfg Config) BpfSDKClient {
+	namespacedMaps = make(map[string]struct{}, len(cfg.NamespacedMaps))
+	for _, m := range cfg.NamespacedMaps {
+		namespacedMaps[m] = struct{}{}
+	}
 	return &bpfSDKClient{
 		mapApi:  &ebpf_maps.BpfMap{},
 		progApi: &ebpf_progs.BpfProgram{},
@@ -688,12 +699,8 @@ func (e *elfLoader) doLoadELF(inputData BpfCustomData) (map[string]BpfData, map[
 }
 
 func isNamespacedMap(mapName string) bool {
-	switch mapName {
-	case "ingress_map", "egress_map", "ingress_pod_state_map", "egress_pod_state_map", "cp_ingress_map", "cp_egress_map", "ipcache_map":
-		return true
-	default:
-		return false
-	}
+	_, ok := namespacedMaps[mapName]
+	return ok
 }
 
 func GetMapNameFromBPFPinPath(pinPath string) (string, string) {

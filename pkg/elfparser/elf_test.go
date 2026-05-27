@@ -33,6 +33,11 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+var testNamespacedMaps = []string{
+	"ingress_map", "egress_map", "ingress_pod_state_map",
+	"egress_pod_state_map", "cp_ingress_map", "cp_egress_map", "ipcache_map",
+}
+
 var (
 	MAP_SECTION_INDEX = 8
 	MAP_TYPE_1        = int(constdef.BPF_MAP_TYPE_LRU_HASH.Index())
@@ -537,7 +542,7 @@ func TestRecovery(t *testing.T) {
 			m := setup(t, tt.elfFileName)
 			defer m.ctrl.Finish()
 
-			bpfSDKclient := New()
+			bpfSDKclient := New(Config{NamespacedMaps: testNamespacedMaps})
 
 			if tt.recoverGlobal {
 				_, _, err := bpfSDKclient.LoadBpfFile(m.path, "global")
@@ -592,6 +597,7 @@ func TestGetMapNameFromBPFPinPath(t *testing.T) {
 			want: [2]string{"egress_map", "hello-udp-748dc8d996-default"},
 		},
 	}
+	_ = New(Config{NamespacedMaps: testNamespacedMaps})
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got1, got2 := GetMapNameFromBPFPinPath(tt.args.pinPath)
@@ -633,6 +639,7 @@ func TestMapGlobal(t *testing.T) {
 			want: true,
 		},
 	}
+	_ = New(Config{NamespacedMaps: testNamespacedMaps})
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got := IsMapGlobal(tt.args.pinPath)
