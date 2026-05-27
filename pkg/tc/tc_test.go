@@ -157,7 +157,7 @@ func TestTCIngressAttachDetach(t *testing.T) {
 	m.ebpf_progs.EXPECT().GetProgFromPinPath(gomock.Any()).AnyTimes()
 	m.ebpf_progs.EXPECT().GetBPFProgAssociatedMapsIDs(gomock.Any()).AnyTimes()
 
-	bpfSDKclient := elfparser.New()
+	bpfSDKclient := elfparser.New(elfparser.Config{})
 	progInfo, _, err := bpfSDKclient.LoadBpfFile(m.path, DUMMY_PROG_NAME)
 	if err != nil {
 		assert.NoError(t, err)
@@ -197,7 +197,7 @@ func TestTCEgressAttachDetach(t *testing.T) {
 	m.ebpf_progs.EXPECT().GetProgFromPinPath(gomock.Any()).AnyTimes()
 	m.ebpf_progs.EXPECT().GetBPFProgAssociatedMapsIDs(gomock.Any()).AnyTimes()
 
-	bpfSDKclient := elfparser.New()
+	bpfSDKclient := elfparser.New(elfparser.Config{})
 	progInfo, _, err := bpfSDKclient.LoadBpfFile(m.path, DUMMY_PROG_NAME)
 	if err != nil {
 		assert.NoError(t, err)
@@ -240,7 +240,7 @@ func TestQdiscCleanup(t *testing.T) {
 	m.ebpf_progs.EXPECT().GetProgFromPinPath(gomock.Any()).AnyTimes()
 	m.ebpf_progs.EXPECT().GetBPFProgAssociatedMapsIDs(gomock.Any()).AnyTimes()
 
-	bpfSDKclient := elfparser.New()
+	bpfSDKclient := elfparser.New(elfparser.Config{})
 	progInfo, _, err := bpfSDKclient.LoadBpfFile(m.path, DUMMY_PROG_NAME)
 	if err != nil {
 		assert.NoError(t, err)
@@ -304,7 +304,7 @@ func TestNetLinkAPIs(t *testing.T) {
 			m.ebpf_progs.EXPECT().GetProgFromPinPath(gomock.Any()).AnyTimes()
 			m.ebpf_progs.EXPECT().GetBPFProgAssociatedMapsIDs(gomock.Any()).AnyTimes()
 
-			bpfSDKclient := elfparser.New()
+			bpfSDKclient := elfparser.New(elfparser.Config{})
 			_, _, err := bpfSDKclient.LoadBpfFile(m.path, DUMMY_PROG_NAME)
 			if err != nil {
 				assert.NoError(t, err)
