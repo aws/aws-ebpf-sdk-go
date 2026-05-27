@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"debug/elf"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -861,9 +862,12 @@ func (b *bpfSDKClient) RecoverAllBpfProgramsAndMaps() (map[string]BpfData, error
 		}
 
 		if progsDirExists {
+			var recoveryErrs []error
 			if err := filepath.Walk(constdef.PROG_BPF_FS, func(pinPath string, fsinfo os.FileInfo, err error) error {
 				if err != nil {
-					return err
+					log.Errorf("Skipping pinPath %s during recovery: %v", pinPath, err)
+					recoveryErrs = append(recoveryErrs, fmt.Errorf("pinPath %s: %w", pinPath, err))
+					return nil
 				}
 				if !fsinfo.IsDir() {
 					log.Infof("Dumping pinpaths - ", pinPath)
@@ -883,8 +887,9 @@ func (b *bpfSDKClient) RecoverAllBpfProgramsAndMaps() (map[string]BpfData, error
 
 					bpfProgInfo, progFD, err := (b.progApi).GetProgFromPinPath(pinPath)
 					if err != nil {
-						log.Infof("Failed to progInfo for pinPath %s", pinPath)
-						return err
+						log.Errorf("Skipping pinPath %s, failed to get progInfo: %v", pinPath, err)
+						recoveryErrs = append(recoveryErrs, fmt.Errorf("pinPath %s: failed to get progInfo: %w", pinPath, err))
+						return nil
 					}
 					pgmData.ProgFD = progFD
 
@@ -893,8 +898,9 @@ func (b *bpfSDKClient) RecoverAllBpfProgramsAndMaps() (map[string]BpfData, error
 						log.Infof("Have associated maps to link")
 						associatedBpfMapList, associatedBPFMapIDs, err := ebpf_progs.BpfGetMapInfoFromProgInfo(progFD, bpfProgInfo.NrMapIDs)
 						if err != nil {
-							log.Infof("Failed to get associated maps")
-							return err
+							log.Errorf("Skipping pinPath %s, failed to get associated maps: %v", pinPath, err)
+							recoveryErrs = append(recoveryErrs, fmt.Errorf("pinPath %s: failed to get associated maps: %w", pinPath, err))
+							return nil
 						}
 						for mapInfoIdx := 0; mapInfoIdx < len(associatedBpfMapList); mapInfoIdx++ {
 							bpfMapInfo := associatedBpfMapList[mapInfoIdx]
@@ -906,8 +912,9 @@ func (b *bpfSDKClient) RecoverAllBpfProgramsAndMaps() (map[string]BpfData, error
 
 							mapIds, ok := mapPodSelector[progNamespace]
 							if !ok {
-								log.Infof("Failed to get ID for %s", progNamespace)
-								return fmt.Errorf("failed to get err")
+								log.Errorf("Skipping pinPath %s, failed to get map ID for namespace %s", pinPath, progNamespace)
+								recoveryErrs = append(recoveryErrs, fmt.Errorf("pinPath %s: failed to get map ID for namespace %s", pinPath, progNamespace))
+								return nil
 							}
 							mapName := mapIds[int(recoveredBpfMap.MapID)]
 
@@ -921,8 +928,9 @@ func (b *bpfSDKClient) RecoverAllBpfProgramsAndMaps() (map[string]BpfData, error
 								//Fill New FD since old FDs will be deleted on recovery
 								localMapFD, ok := mapIDsToFDs[int(newMapID)]
 								if !ok {
-									log.Infof("Unable to get FD from ID %d", int(newMapID))
-									return fmt.Errorf("unable to get FD")
+									log.Errorf("Skipping pinPath %s, unable to get FD from map ID %d", pinPath, int(newMapID))
+									recoveryErrs = append(recoveryErrs, fmt.Errorf("pinPath %s: unable to get FD from map ID %d", pinPath, int(newMapID)))
+									return nil
 								}
 								mapFD = localMapFD
 							}
@@ -953,6 +961,9 @@ func (b *bpfSDKClient) RecoverAllBpfProgramsAndMaps() (map[string]BpfData, error
 			}); err != nil {
 				log.Infof("Error walking bpf prog directory:", err)
 				return nil, fmt.Errorf("failed walking the bpfdirectory %v", err)
+			}
+			if len(recoveryErrs) > 0 {
+				return loadedPrograms, fmt.Errorf("partial recovery — %d pin(s) skipped: %w", len(recoveryErrs), errors.Join(recoveryErrs...))
 			}
 		}
 	} else {
