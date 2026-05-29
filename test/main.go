@@ -103,7 +103,7 @@ func main() {
 }
 
 func TestLoadProg() error {
-	gosdkClient := goelf.New()
+	gosdkClient := goelf.New(goelf.Config{})
 	progInfo, _, err := gosdkClient.LoadBpfFile("c/test.bpf.elf", "test")
 	if err != nil {
 		fmt.Println("Load BPF failed", "err:", err)
@@ -117,7 +117,7 @@ func TestLoadProg() error {
 }
 
 func TestLoadv6Prog() error {
-	gosdkClient := goelf.New()
+	gosdkClient := goelf.New(goelf.Config{})
 	progInfo, _, err := gosdkClient.LoadBpfFile("c/test-v6.bpf.elf", "test")
 	if err != nil {
 		fmt.Println("Load BPF failed", "err:", err)
@@ -131,7 +131,7 @@ func TestLoadv6Prog() error {
 }
 
 func TestLoadMapWithNoProg() error {
-	gosdkClient := goelf.New()
+	gosdkClient := goelf.New(goelf.Config{})
 	_, loadedMap, err := gosdkClient.LoadBpfFile("c/test-map.bpf.elf", "test")
 	if err != nil {
 		fmt.Println("Load BPF failed", "err:", err)
@@ -146,7 +146,7 @@ func TestLoadMapWithNoProg() error {
 }
 
 func TestMapOperations() error {
-	gosdkClient := goelf.New()
+	gosdkClient := goelf.New(goelf.Config{})
 	_, loadedMap, err := gosdkClient.LoadBpfFile("c/test-map.bpf.elf", "operations")
 	if err != nil {
 		fmt.Println("Load BPF failed", "err:", err)
@@ -283,7 +283,7 @@ func TestMapOperations() error {
 }
 
 func TestLoadTCfilter() error {
-	gosdkClient := goelf.New()
+	gosdkClient := goelf.New(goelf.Config{})
 	progInfo, _, err := gosdkClient.LoadBpfFile("c/test.bpf.elf", "test")
 	if err != nil {
 		fmt.Println("Load BPF failed", "err:", err)
@@ -323,7 +323,7 @@ func TestLoadTCfilter() error {
 }
 
 func TestLoadMapWithCustomSize() error {
-	gosdkClient := goelf.New()
+	gosdkClient := goelf.New(goelf.Config{})
 
 	var customData goelf.BpfCustomData
 	customData.FilePath = "c/test-map.bpf.elf"
@@ -346,7 +346,7 @@ func TestLoadMapWithCustomSize() error {
 }
 
 func TestBulkMapOperations() error {
-	gosdkClient := goelf.New()
+	gosdkClient := goelf.New(goelf.Config{})
 	_, loadedMap, err := gosdkClient.LoadBpfFile("c/test-map.bpf.elf", "operations")
 	if err != nil {
 		fmt.Println("Load BPF failed", "err:", err)
@@ -432,7 +432,7 @@ func bpfInetTrieKeyToIPNet(key BPFInetTrieKey) net.IPNet {
 }
 
 func TestBulkRefreshMapOperations() error {
-	gosdkClient := goelf.New()
+	gosdkClient := goelf.New(goelf.Config{})
 	_, loadedMap, err := gosdkClient.LoadBpfFile("c/test-map.bpf.elf", "operations")
 	if err != nil {
 		fmt.Println("Load BPF failed", "err:", err)

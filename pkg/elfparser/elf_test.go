@@ -33,6 +33,11 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+var testNamespacedMaps = []string{
+	"ingress_map", "egress_map", "ingress_pod_state_map",
+	"egress_pod_state_map", "cp_ingress_map", "cp_egress_map", "ipcache_map",
+}
+
 var (
 	MAP_SECTION_INDEX = 8
 	MAP_TYPE_1        = int(constdef.BPF_MAP_TYPE_LRU_HASH.Index())
@@ -103,7 +108,7 @@ func TestLoad(t *testing.T) {
 
 			elfFile, err := elf.NewFile(f)
 			assert.NoError(t, err)
-			elfLoader := newElfLoader(elfFile, m.ebpf_maps, m.ebpf_progs, "test")
+			elfLoader := newElfLoader(elfFile, m.ebpf_maps, m.ebpf_progs, "test", nil)
 			loadedProgs, loadedMaps, err := elfLoader.doLoadELF(BpfCustomData{})
 			assert.NoError(t, err)
 			assert.Equal(t, tt.wantProg, len(loadedProgs))
@@ -143,7 +148,7 @@ func TestParseSection(t *testing.T) {
 
 			elfFile, err := elf.NewFile(f)
 			assert.NoError(t, err)
-			elfLoader := newElfLoader(elfFile, m.ebpf_maps, m.ebpf_progs, "test")
+			elfLoader := newElfLoader(elfFile, m.ebpf_maps, m.ebpf_progs, "test", nil)
 
 			err = elfLoader.parseSection()
 			if tt.wantErr != nil {
@@ -185,7 +190,7 @@ func TestParseSection(t *testing.T) {
 
 			elfFile, err := elf.NewFile(f)
 			assert.NoError(t, err)
-			elfLoader := newElfLoader(elfFile, m.ebpf_maps, m.ebpf_progs, "test")
+			elfLoader := newElfLoader(elfFile, m.ebpf_maps, m.ebpf_progs, "test", nil)
 
 			err = elfLoader.parseSection()
 			if tt.wantErr != nil {
@@ -226,7 +231,7 @@ func TestParseSection(t *testing.T) {
 
 			elfFile, err := elf.NewFile(f)
 			assert.NoError(t, err)
-			elfLoader := newElfLoader(elfFile, m.ebpf_maps, m.ebpf_progs, "test")
+			elfLoader := newElfLoader(elfFile, m.ebpf_maps, m.ebpf_progs, "test", nil)
 
 			err = elfLoader.parseSection()
 			if tt.wantErr != nil {
@@ -276,7 +281,7 @@ func TestParseSection(t *testing.T) {
 
 			elfFile, err := elf.NewFile(f)
 			assert.NoError(t, err)
-			elfLoader := newElfLoader(elfFile, m.ebpf_maps, m.ebpf_progs, "test")
+			elfLoader := newElfLoader(elfFile, m.ebpf_maps, m.ebpf_progs, "test", nil)
 
 			err = elfLoader.parseSection()
 			if tt.wantErr != nil {
@@ -333,7 +338,7 @@ func TestParseMap(t *testing.T) {
 
 			elfFile, err := elf.NewFile(f)
 			assert.NoError(t, err)
-			elfLoader := newElfLoader(elfFile, m.ebpf_maps, m.ebpf_progs, "test")
+			elfLoader := newElfLoader(elfFile, m.ebpf_maps, m.ebpf_progs, "test", nil)
 
 			err = elfLoader.parseSection()
 			assert.NoError(t, err)
@@ -381,7 +386,7 @@ func TestParseMap(t *testing.T) {
 			var parsedMapData []int
 			elfFile, err := elf.NewFile(f)
 			assert.NoError(t, err)
-			elfLoader := newElfLoader(elfFile, m.ebpf_maps, m.ebpf_progs, "test")
+			elfLoader := newElfLoader(elfFile, m.ebpf_maps, m.ebpf_progs, "test", nil)
 
 			err = elfLoader.parseSection()
 			assert.NoError(t, err)
@@ -454,7 +459,7 @@ func TestParseProg(t *testing.T) {
 
 			elfFile, err := elf.NewFile(f)
 			assert.NoError(t, err)
-			elfLoader := newElfLoader(elfFile, m.ebpf_maps, m.ebpf_progs, "test")
+			elfLoader := newElfLoader(elfFile, m.ebpf_maps, m.ebpf_progs, "test", nil)
 
 			err = elfLoader.parseSection()
 			assert.NoError(t, err)
@@ -537,7 +542,7 @@ func TestRecovery(t *testing.T) {
 			m := setup(t, tt.elfFileName)
 			defer m.ctrl.Finish()
 
-			bpfSDKclient := New()
+			bpfSDKclient := New(Config{NamespacedMaps: testNamespacedMaps})
 
 			if tt.recoverGlobal {
 				_, _, err := bpfSDKclient.LoadBpfFile(m.path, "global")
@@ -592,9 +597,10 @@ func TestGetMapNameFromBPFPinPath(t *testing.T) {
 			want: [2]string{"egress_map", "hello-udp-748dc8d996-default"},
 		},
 	}
+	client := New(Config{NamespacedMaps: testNamespacedMaps}).(*bpfSDKClient)
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got1, got2 := GetMapNameFromBPFPinPath(tt.args.pinPath)
+			got1, got2 := client.GetMapNameFromBPFPinPath(tt.args.pinPath)
 			assert.Equal(t, tt.want[0], got1)
 			assert.Equal(t, tt.want[1], got2)
 		})
@@ -633,12 +639,39 @@ func TestMapGlobal(t *testing.T) {
 			want: true,
 		},
 	}
+	client := New(Config{NamespacedMaps: testNamespacedMaps}).(*bpfSDKClient)
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := IsMapGlobal(tt.args.pinPath)
+			got := client.IsMapGlobal(tt.args.pinPath)
 			assert.Equal(t, tt.want, got)
 		})
 	}
+}
+
+func TestMapClassifier(t *testing.T) {
+	mc := mapClassifier{
+		namespacedMaps: map[string]struct{}{
+			"ingress_map": {},
+			"egress_map":  {},
+		},
+	}
+
+	assert.True(t, mc.isNamespacedMap("ingress_map"))
+	assert.False(t, mc.isNamespacedMap("policy_events"))
+
+	name, ns := mc.GetMapNameFromBPFPinPath("/sys/fs/bpf/globals/aws/maps/pod-abc-default_ingress_map")
+	assert.Equal(t, "ingress_map", name)
+	assert.Equal(t, "pod-abc-default", ns)
+
+	name, ns = mc.GetMapNameFromBPFPinPath("/sys/fs/bpf/globals/aws/maps/global_policy_events")
+	assert.Equal(t, "policy_events", name)
+	assert.Equal(t, "policy_events", ns)
+
+	assert.False(t, mc.IsMapGlobal("/sys/fs/bpf/globals/aws/maps/pod-abc-default_ingress_map"))
+	assert.True(t, mc.IsMapGlobal("/sys/fs/bpf/globals/aws/maps/global_policy_events"))
+
+	empty := mapClassifier{namespacedMaps: map[string]struct{}{}}
+	assert.True(t, empty.IsMapGlobal("/sys/fs/bpf/globals/aws/maps/pod-abc-default_ingress_map"))
 }
 
 func TestProgType(t *testing.T) {

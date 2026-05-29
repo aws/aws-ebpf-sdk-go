@@ -47,6 +47,12 @@ var (
 var log = logger.Get()
 var sdkCache = cache.Get()
 
+// Config carries SDK construction options. NamespacedMaps lists BPF map names
+// that should be treated as per-namespace (per-pod-identifier) rather than global
+type Config struct {
+	NamespacedMaps []string
+}
+
 type BpfSDKClient interface {
 	IncreaseRlimit() error
 	LoadBpfFile(path, customizedPinPath string) (map[string]BpfData, map[string]ebpf_maps.BpfMap, error)
@@ -67,7 +73,14 @@ type BpfCustomData struct {
 	CustomMapSize map[string]int // Map of bpfMaps with custom size
 }
 
+// mapClassifier classifies BPF pin paths as global vs per-namespace using the
+// configured set of namespaced map names.
+type mapClassifier struct {
+	namespacedMaps map[string]struct{}
+}
+
 type bpfSDKClient struct {
+	mapClassifier
 	mapApi  ebpf_maps.BpfMapAPIs
 	progApi ebpf_progs.BpfProgAPIs
 }
@@ -85,6 +98,7 @@ type progEntry struct {
 }
 
 type elfLoader struct {
+	mapClassifier
 	elfFile           *elf.File
 	customizedPinPath string
 	bpfMapApi         ebpf_maps.BpfMapAPIs
@@ -98,10 +112,15 @@ type elfLoader struct {
 	progSectionMap map[uint32]progEntry
 }
 
-func New() BpfSDKClient {
+func New(cfg Config) BpfSDKClient {
+	nsSet := make(map[string]struct{}, len(cfg.NamespacedMaps))
+	for _, m := range cfg.NamespacedMaps {
+		nsSet[m] = struct{}{}
+	}
 	return &bpfSDKClient{
-		mapApi:  &ebpf_maps.BpfMap{},
-		progApi: &ebpf_progs.BpfProgram{},
+		mapClassifier: mapClassifier{namespacedMaps: nsSet},
+		mapApi:        &ebpf_maps.BpfMap{},
+		progApi:       &ebpf_progs.BpfProgram{},
 	}
 }
 
@@ -118,8 +137,9 @@ func (b *bpfSDKClient) IncreaseRlimit() error {
 	return nil
 }
 
-func newElfLoader(elfFile *elf.File, bpfmapapi ebpf_maps.BpfMapAPIs, bpfprogapi ebpf_progs.BpfProgAPIs, customizedpinPath string) *elfLoader {
+func newElfLoader(elfFile *elf.File, bpfmapapi ebpf_maps.BpfMapAPIs, bpfprogapi ebpf_progs.BpfProgAPIs, customizedpinPath string, namespacedMaps map[string]struct{}) *elfLoader {
 	elfloader := &elfLoader{
+		mapClassifier:     mapClassifier{namespacedMaps: namespacedMaps},
 		elfFile:           elfFile,
 		bpfMapApi:         bpfmapapi,
 		bpfProgApi:        bpfprogapi,
@@ -144,7 +164,7 @@ func (b *bpfSDKClient) LoadBpfFile(path, customizedPinPath string) (map[string]B
 		return nil, nil, err
 	}
 
-	elfLoader := newElfLoader(elfFile, b.mapApi, b.progApi, customizedPinPath)
+	elfLoader := newElfLoader(elfFile, b.mapApi, b.progApi, customizedPinPath, b.namespacedMaps)
 
 	bpfLoadedProg, bpfLoadedMaps, err := elfLoader.doLoadELF(BpfCustomData{})
 	if err != nil {
@@ -167,7 +187,7 @@ func (b *bpfSDKClient) LoadBpfFileWithCustomData(inputData BpfCustomData) (map[s
 		return nil, nil, err
 	}
 
-	elfLoader := newElfLoader(elfFile, b.mapApi, b.progApi, inputData.CustomPinPath)
+	elfLoader := newElfLoader(elfFile, b.mapApi, b.progApi, inputData.CustomPinPath, b.namespacedMaps)
 
 	bpfLoadedProg, bpfLoadedMaps, err := elfLoader.doLoadELF(inputData)
 	if err != nil {
@@ -218,7 +238,7 @@ func (e *elfLoader) loadMap(parsedMapData []ebpf_maps.CreateEBPFMapInput) (map[s
 
 		programmedMaps[loadedMaps.Name] = bpfMap
 
-		if IsMapGlobal(pinPath) {
+		if e.IsMapGlobal(pinPath) {
 			//Add to global cache
 			sdkCache.Set(loadedMaps.Name, int(bpfMap.MapFD))
 			log.Infof("Added map Name %s and FD %d to SDK cache", loadedMaps.Name, bpfMap.MapFD)
@@ -687,22 +707,18 @@ func (e *elfLoader) doLoadELF(inputData BpfCustomData) (map[string]BpfData, map[
 	return loadedProgData, loadedMapData, nil
 }
 
-func isNamespacedMap(mapName string) bool {
-	switch mapName {
-	case "ingress_map", "egress_map", "ingress_pod_state_map", "egress_pod_state_map", "cp_ingress_map", "cp_egress_map", "ipcache_map":
-		return true
-	default:
-		return false
-	}
+func (m *mapClassifier) isNamespacedMap(mapName string) bool {
+	_, ok := m.namespacedMaps[mapName]
+	return ok
 }
 
-func GetMapNameFromBPFPinPath(pinPath string) (string, string) {
+func (m *mapClassifier) GetMapNameFromBPFPinPath(pinPath string) (string, string) {
 	splittedPinPath := strings.Split(pinPath, "/")
 	lastSegment := splittedPinPath[len(splittedPinPath)-1]
 	mapNamespace, mapName, _ := strings.Cut(lastSegment, "_")
 	log.Infof("Found Identified - %s : %s", mapNamespace, mapName)
 
-	if isNamespacedMap(mapName) {
+	if m.isNamespacedMap(mapName) {
 		log.Infof("Adding %s -> %s", mapName, mapNamespace)
 		return mapName, mapNamespace
 	}
@@ -711,9 +727,9 @@ func GetMapNameFromBPFPinPath(pinPath string) (string, string) {
 	return mapName, mapName
 }
 
-func IsMapGlobal(pinPath string) bool {
-	mapName, _ := GetMapNameFromBPFPinPath(pinPath)
-	return !isNamespacedMap(mapName)
+func (m *mapClassifier) IsMapGlobal(pinPath string) bool {
+	mapName, _ := m.GetMapNameFromBPFPinPath(pinPath)
+	return !m.isNamespacedMap(mapName)
 }
 
 func (b *bpfSDKClient) RecoverGlobalMaps() (map[string]ebpf_maps.BpfMap, error) {
@@ -731,7 +747,7 @@ func (b *bpfSDKClient) RecoverGlobalMaps() (map[string]ebpf_maps.BpfMap, error) 
 			}
 			if !fsinfo.IsDir() {
 				log.Infof("Dumping pinpaths - ", pinPath)
-				if IsMapGlobal(pinPath) {
+				if b.IsMapGlobal(pinPath) {
 					log.Infof("Found global pinpaths - ", pinPath)
 					bpfMapInfo, err := b.mapApi.GetMapFromPinPath(pinPath)
 					if err != nil {
@@ -742,7 +758,7 @@ func (b *bpfSDKClient) RecoverGlobalMaps() (map[string]ebpf_maps.BpfMap, error) 
 					log.Infof("Got ID %d", mapID)
 
 					//Get map name
-					mapName, _ := GetMapNameFromBPFPinPath(pinPath)
+					mapName, _ := b.GetMapNameFromBPFPinPath(pinPath)
 
 					log.Infof("Adding ID %d to name %s", mapID, mapName)
 
@@ -828,10 +844,10 @@ func (b *bpfSDKClient) RecoverAllBpfProgramsAndMaps() (map[string]BpfData, error
 					mapID := bpfMapInfo.Id
 					log.Infof("Got ID %d", mapID)
 					//Get map name
-					mapName, mapNamespace := GetMapNameFromBPFPinPath(pinPath)
+					mapName, mapNamespace := b.GetMapNameFromBPFPinPath(pinPath)
 					mapIDsToNames[int(mapID)] = mapName
 
-					if IsMapGlobal(pinPath) {
+					if b.IsMapGlobal(pinPath) {
 						return nil
 					}
 					//Fill New FD since old FDs will be deleted on recovery
@@ -999,7 +1015,7 @@ func (b *bpfSDKClient) GetAllBpfProgramsAndMaps() (map[string]BpfData, error) {
 					mapID := bpfMapInfo.Id
 					log.Infof("Got ID %d", mapID)
 					//Get map name
-					mapName, mapNamespace := GetMapNameFromBPFPinPath(pinPath)
+					mapName, mapNamespace := b.GetMapNameFromBPFPinPath(pinPath)
 					mapIDsToNames[int(mapID)] = mapName
 
 					log.Infof("Adding ID %d to name %s and NS %s", mapID, mapName, mapNamespace)
