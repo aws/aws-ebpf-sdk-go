@@ -187,12 +187,6 @@ func (m *BpfProgram) UnPinProg(pinPath string) error {
 	return unix.Close(int(m.ProgFD))
 }
 
-func parseLogs(log []byte) []string {
-	logStr := string(log)
-	logs := strings.Split(logStr, "\n")
-	return logs
-}
-
 func (m *BpfProgram) LoadProg(progMetaData CreateEBPFProgInput) (int, error) {
 
 	var prog_type uint32
@@ -233,12 +227,17 @@ func (m *BpfProgram) LoadProg(progMetaData CreateEBPFProgInput) (int, error) {
 		unsafe.Sizeof(program))
 	runtime.KeepAlive(progMetaData.ProgData)
 	runtime.KeepAlive(license)
+	runtime.KeepAlive(logBuf)
 
-	log.Infof("Load prog done with fd : %d", int(fd))
+	log.Infof("Load prog done with fd : %d errno: %d (%s) insnCnt: %d attrSize: %d progType: %d", int(fd), int(errno), errno.Error(), program.InsnCnt, unsafe.Sizeof(program), program.ProgType)
 	if errno != 0 {
-		logArray := parseLogs(logBuf)
-		for _, str := range logArray {
-			fmt.Println(str)
+		// Surface the verifier log captured during the load above for diagnostics.
+		verifierLog := string(logBuf[:])
+		if idx := strings.IndexByte(verifierLog, 0); idx >= 0 {
+			verifierLog = verifierLog[:idx]
+		}
+		if len(verifierLog) > 0 {
+			log.Infof("Verifier log: %s", verifierLog)
 		}
 		return -1, errno
 	}

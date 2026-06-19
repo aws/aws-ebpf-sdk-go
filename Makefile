@@ -48,7 +48,15 @@ TARGETS := \
 		  $(TESTDATADIR)/recoverydata \
 		  $(TESTDATADIR)/test-kprobe \
 		  $(TESTDATADIR)/xdp \
-		  $(TESTDATADIR)/ring_buffer
+		  $(TESTDATADIR)/ring_buffer \
+		  $(TESTDATADIR)/tc.subprog \
+		  $(TESTDATADIR)/tc.subprog_chain \
+		  $(TESTDATADIR)/tc.subprog_textonly_map \
+		  $(TESTDATADIR)/tc.subprog_nomap \
+		  $(TESTDATADIR)/tc.subprog_globalmap \
+		  $(TESTDATADIR)/tc.multi_subprog \
+		  $(TESTDATADIR)/tc.multi_prog_one_section \
+		  $(TESTDATADIR)/tc.multi_prog_one_section_subprog
 
 %.bpf.elf: %.bpf.c
 	$(CLANG) $(CLANG_INCLUDE) $(BPF_CFLAGS) -c $< -o $@
@@ -63,7 +71,7 @@ $(TESTDATADIR)/vmlinux.h:
 	$(BPFTOOL) btf dump file $(VMLINUX_BTF) format c > $@
 
 ##@ Run Unit Tests
-# Run unit tests
+# Run unit tests (need sudo for few tests, in case sudo doesn't have go in path, then use - sudo env "PATH=$PATH" make unit-test)
 unit-test: $(TESTDATADIR)/vmlinux.h
 unit-test: $(addsuffix .bpf.elf,$(TARGETS))
 unit-test: export AWS_EBPF_SDK_LOG_FILE=$(LOGFILE_PATH)
