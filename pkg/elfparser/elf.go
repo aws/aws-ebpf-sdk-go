@@ -309,7 +309,7 @@ func (e *elfLoader) loadProg(loadedProgData map[string]ebpf_progs.CreateEBPFProg
 		bpfData := BpfData{}
 		progFD, errno := e.bpfProgApi.LoadProg(pgmInput)
 		if progFD == -1 {
-			log.Infof("Failed to load prog: error %v", errno)
+			log.Infof("Failed to load prog", "error", errno)
 			return nil, fmt.Errorf("failed to Load the prog")
 		}
 		log.Infof("loaded prog with %d", progFD)
