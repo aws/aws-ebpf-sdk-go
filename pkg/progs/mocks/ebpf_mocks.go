@@ -80,6 +80,21 @@ func (mr *MockBpfProgAPIsMockRecorder) LoadProg(arg0 interface{}) *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "LoadProg", reflect.TypeOf((*MockBpfProgAPIs)(nil).LoadProg), arg0)
 }
 
+// LoadProgWithNonePinType mocks base method.
+func (m *MockBpfProgAPIs) LoadProgWithNonePinType(arg0 progs.CreateEBPFProgInput, arg1 uint32) (int, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "LoadProgWithNonePinType", arg0, arg1)
+	ret0, _ := ret[0].(int)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// LoadProgWithNonePinType indicates an expected call of LoadProgWithNonePinType.
+func (mr *MockBpfProgAPIsMockRecorder) LoadProgWithNonePinType(arg0, arg1 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "LoadProgWithNonePinType", reflect.TypeOf((*MockBpfProgAPIs)(nil).LoadProgWithNonePinType), arg0, arg1)
+}
+
 // PinProg mocks base method.
 func (m *MockBpfProgAPIs) PinProg(arg0 uint32, arg1 string) error {
 	m.ctrl.T.Helper()
