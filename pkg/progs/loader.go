@@ -26,7 +26,6 @@ import (
 	constdef "github.com/aws/aws-ebpf-sdk-go/pkg/constants"
 	"github.com/aws/aws-ebpf-sdk-go/pkg/logger"
 	ebpf_maps "github.com/aws/aws-ebpf-sdk-go/pkg/maps"
-	"github.com/aws/aws-ebpf-sdk-go/pkg/metrics"
 	"github.com/aws/aws-ebpf-sdk-go/pkg/utils"
 	"github.com/vishvananda/netlink"
 	"golang.org/x/sys/unix"
@@ -41,42 +40,6 @@ type BpfProgAPIs interface {
 }
 
 var log = logger.Get()
-
-// maxProgLoadAttempts bounds how many times BPF_PROG_LOAD is retried on EAGAIN
-// (verifier interrupted by a pending signal). 5 attempts comfortably covers the
-// observed sub-1% EAGAIN rate while still surfacing a genuinely stuck load.
-const maxProgLoadAttempts = 5
-
-// loadProgWithRetry runs the BPF_PROG_LOAD syscall (provided by load) and
-// retries it on EAGAIN up to maxProgLoadAttempts times.
-//
-// The kernel BPF verifier aborts with EAGAIN if a (non-fatal) signal is pending
-// on the loading thread mid-verify. The Go runtime fires SIGURG constantly for
-// asynchronous preemption and GC stop-the-world, so under high pod-create
-// concurrency a SIGURG can land during a load's verify window and trip an
-// otherwise valid load.
-//
-// The retry is intentionally signal-agnostic rather than masking signals: the
-// culprit (SIGURG) is owned and re-armed by the Go runtime and cannot be
-// cleanly masked without breaking async preemption. It is bounded so a
-// genuinely stuck load still surfaces instead of livelocking.
-func loadProgWithRetry(load func() (uintptr, syscall.Errno)) (uintptr, syscall.Errno) {
-	var fd uintptr
-	var errno syscall.Errno
-	for attempt := 1; ; attempt++ {
-		fd, errno = load()
-		if errno == unix.EAGAIN {
-			if attempt < maxProgLoadAttempts {
-				metrics.RecordProgLoadEAGAINRetry()
-				log.Infof("BPF_PROG_LOAD returned EAGAIN (attempt %d/%d), retrying", attempt, maxProgLoadAttempts)
-				continue
-			}
-			metrics.RecordProgLoadEAGAINExhausted()
-			log.Errorf("BPF_PROG_LOAD still EAGAIN after %d attempts, giving up - prog left unattached", maxProgLoadAttempts)
-		}
-		return fd, errno
-	}
-}
 
 type CreateEBPFProgInput struct {
 	ProgType       string
@@ -264,15 +227,12 @@ func (m *BpfProgram) LoadProg(progMetaData CreateEBPFProgInput) (int, error) {
 	license := []byte(progMetaData.LicenseStr)
 	program.License = uintptr(unsafe.Pointer(&license[0]))
 
-	fd, errno := loadProgWithRetry(func() (uintptr, syscall.Errno) {
-		r, _, e := unix.Syscall(unix.SYS_BPF,
-			uintptr(constdef.BPF_PROG_LOAD),
-			uintptr(unsafe.Pointer(&program)),
-			unsafe.Sizeof(program))
-		runtime.KeepAlive(progMetaData.ProgData)
-		runtime.KeepAlive(license)
-		return r, e
-	})
+	fd, _, errno := unix.Syscall(unix.SYS_BPF,
+		uintptr(constdef.BPF_PROG_LOAD),
+		uintptr(unsafe.Pointer(&program)),
+		unsafe.Sizeof(program))
+	runtime.KeepAlive(progMetaData.ProgData)
+	runtime.KeepAlive(license)
 
 	log.Infof("Load prog done with fd : %d", int(fd))
 	if errno != 0 {
