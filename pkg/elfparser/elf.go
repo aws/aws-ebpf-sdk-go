@@ -317,7 +317,7 @@ func (e *elfLoader) loadProg(loadedProgData map[string]ebpf_progs.CreateEBPFProg
 		progFD, errno := e.bpfProgApi.LoadProg(pgmInput)
 		if progFD == -1 {
 			log.Infof("Failed to load prog: fd=%d err=%v", progFD, errno)
-			return nil, fmt.Errorf("failed to Load the prog")
+			return nil, fmt.Errorf("failed to Load the prog: %w", errno)
 		}
 		log.Infof("loaded prog with %d", progFD)
 
@@ -633,12 +633,24 @@ func (e *elfLoader) parseAndApplyRelocSection(progIndex uint32, loadedMaps map[s
 			// for independently-verified global functions and they are not
 			// supported here.
 			//
+			// Only .text is appended, so the call target must live there.
+			if int(relocationEntry.symbol.Section) != e.textSectionIndex {
+				return nil, nil, fmt.Errorf("call relocation for %q targets section %d, not .text (%d); calls to subprograms outside .text are not supported",
+					funcName, relocationEntry.symbol.Section, e.textSectionIndex)
+			}
+
 			// Recover A = (insn.imm + 1) * bpfInsDefSize, then rebase onto the
-			// appended .text (which begins progSectionSize bytes into the combined
-			// buffer): target = progSectionSize + S + A.
+			// appended .text: target = progSectionSize + S + A.
 			ebpfInstruction.SrcReg = 1 // BPF_PSEUDO_CALL
 			targetByteOffset := (ebpfInstruction.Imm + 1) * int32(bpfInsDefSize)
 			targetOffset := int32(progSectionSize) + int32(relocationEntry.symbol.Value) + targetByteOffset
+
+			// Guard against a corrupt addend producing an out-of-range target.
+			if targetOffset < 0 || int(targetOffset) >= len(data) {
+				return nil, nil, fmt.Errorf("call relocation for %q computed out-of-bounds target offset %d (combined size %d)",
+					funcName, targetOffset, len(data))
+			}
+
 			targetInsnIdx := targetOffset / int32(bpfInsDefSize)
 			callInsnIdx := int32(relocationEntry.relOffset / bpfInsDefSize)
 			ebpfInstruction.Imm = targetInsnIdx - callInsnIdx - 1
@@ -841,9 +853,9 @@ func (e *elfLoader) parseProg(loadedMaps map[string]ebpf_maps.BpfMap) (map[strin
 							}
 						}
 
-						loadSize := uint64(len(progBody) + len(textPortion))
+						loadSize := len(progBody) + len(textPortion)
 						log.Infof("Program '%s': funcSize=%d sectionLen=%d textLen=%d loadSize=%d insns=%d",
-							ProgName, progSize, dataProg.Size, len(textPortion), loadSize, loadSize/uint64(bpfInsDefSize))
+							ProgName, progSize, dataProg.Size, len(textPortion), loadSize, loadSize/bpfInsDefSize)
 						programData := make([]byte, loadSize)
 						copy(programData, progBody)
 						copy(programData[len(progBody):], textPortion)

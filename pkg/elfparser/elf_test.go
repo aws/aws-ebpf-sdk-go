@@ -858,6 +858,31 @@ func TestLoadMap(t *testing.T) {
 	}
 }
 
+func TestLoadProgReturnsUnderlyingError(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	loadErr := errors.New("verifier rejected program")
+	mockBpfProgAPI := mock_ebpf_progs.NewMockBpfProgAPIs(ctrl)
+	mockBpfProgAPI.EXPECT().LoadProg(gomock.Any()).Return(-1, loadErr)
+
+	elfLoader := &elfLoader{
+		bpfProgApi: mockBpfProgAPI,
+	}
+	loadedProgData := map[string]ebpf_progs.CreateEBPFProgInput{
+		"/sys/fs/bpf/globals/aws/programs/test_prog": {
+			ProgType:   "tc_cls",
+			ProgData:   make([]byte, bpfInsDefSize),
+			PinPath:    "/sys/fs/bpf/globals/aws/programs/test_prog",
+			InsDefSize: bpfInsDefSize,
+		},
+	}
+
+	_, err := elfLoader.loadProg(loadedProgData, nil)
+	assert.Error(t, err)
+	assert.ErrorIs(t, err, loadErr)
+}
+
 func TestSubprogramParseProg(t *testing.T) {
 	m := setup(t, "../../test-data/tc.subprog.bpf.elf")
 	defer m.ctrl.Finish()
@@ -1465,4 +1490,33 @@ func TestSubprogramRealKernelLoad(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestSubprogramInCustomSectionRejected verifies a call to a subprogram outside
+// .text (custom-section __noinline) is rejected rather than mis-relocated.
+func TestSubprogramInCustomSectionRejected(t *testing.T) {
+	m := setup(t, "../../test-data/tc.subprog_badsection.bpf.elf")
+	defer m.ctrl.Finish()
+	f, err := os.Open(m.path)
+	if !assert.NoError(t, err, "open test ELF") {
+		return
+	}
+	defer f.Close()
+
+	elfFile, err := elf.NewFile(f)
+	assert.NoError(t, err)
+	elfLoader := newElfLoader(elfFile, m.ebpf_maps, m.ebpf_progs, "test", nil)
+	assert.NoError(t, elfLoader.parseSection())
+
+	mapData, err := elfLoader.parseMap(BpfCustomData{})
+	assert.NoError(t, err)
+	m.ebpf_maps.EXPECT().CreateBPFMap(gomock.Any()).Return(ebpf_maps.BpfMap{MapFD: 5}, nil).AnyTimes()
+	m.ebpf_maps.EXPECT().GetBPFmapInfo(gomock.Any()).Return(ebpf_maps.BpfMapInfo{Id: 100}, nil).AnyTimes()
+	m.ebpf_maps.EXPECT().PinMap(gomock.Any(), gomock.Any()).AnyTimes()
+	m.ebpf_maps.EXPECT().GetMapFromPinPath(gomock.Any()).AnyTimes()
+	loadedMaps, err := elfLoader.loadMap(mapData)
+	assert.NoError(t, err)
+
+	_, err = elfLoader.parseProg(loadedMaps)
+	assert.Error(t, err, "call to a subprogram outside .text must be rejected")
 }

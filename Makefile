@@ -54,6 +54,7 @@ TARGETS := \
 		  $(TESTDATADIR)/tc.subprog_textonly_map \
 		  $(TESTDATADIR)/tc.subprog_nomap \
 		  $(TESTDATADIR)/tc.subprog_globalmap \
+		  $(TESTDATADIR)/tc.subprog_badsection \
 		  $(TESTDATADIR)/tc.multi_subprog \
 		  $(TESTDATADIR)/tc.multi_prog_one_section \
 		  $(TESTDATADIR)/tc.multi_prog_one_section_subprog
