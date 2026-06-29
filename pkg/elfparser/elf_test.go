@@ -16,6 +16,7 @@ package elfparser
 
 import (
 	"debug/elf"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"os"
@@ -24,6 +25,7 @@ import (
 	"testing"
 
 	ebpf_maps "github.com/aws/aws-ebpf-sdk-go/pkg/maps"
+	ebpf_progs "github.com/aws/aws-ebpf-sdk-go/pkg/progs"
 
 	constdef "github.com/aws/aws-ebpf-sdk-go/pkg/constants"
 	mock_ebpf_maps "github.com/aws/aws-ebpf-sdk-go/pkg/maps/mocks"
@@ -31,6 +33,7 @@ import (
 	"github.com/aws/aws-ebpf-sdk-go/pkg/utils"
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/assert"
+	"golang.org/x/sys/unix"
 )
 
 var testNamespacedMaps = []string{
@@ -88,6 +91,18 @@ func TestLoad(t *testing.T) {
 			elfFileName: "../../test-data/test.map.bpf.elf",
 			wantMap:     1,
 			wantProg:    0,
+		},
+		{
+			name:        "Test Load ELF with subprograms",
+			elfFileName: "../../test-data/tc.subprog.bpf.elf",
+			wantMap:     1,
+			wantProg:    1,
+		},
+		{
+			name:        "Test Load ELF with chained subprograms",
+			elfFileName: "../../test-data/tc.subprog_chain.bpf.elf",
+			wantMap:     1,
+			wantProg:    1,
 		},
 	}
 
@@ -198,6 +213,54 @@ func TestParseSection(t *testing.T) {
 			} else {
 				gotMapIndex := elfLoader.mapSectionIndex
 				assert.Equal(t, tt.want, gotMapIndex)
+			}
+		})
+	}
+
+	texttests := []struct {
+		name            string
+		elfFileName     string
+		wantTextSection bool
+		wantTextRelo    bool
+	}{
+		{
+			name:            "Empty .text section in regular ELF",
+			elfFileName:     "../../test-data/tc.ingress.bpf.elf",
+			wantTextSection: true,  // clang always emits a .text section
+			wantTextRelo:    false, // but no .rel.text for regular ELFs
+		},
+		{
+			name:            "Has .text section with subprograms",
+			elfFileName:     "../../test-data/tc.subprog.bpf.elf",
+			wantTextSection: true,
+			wantTextRelo:    true, // has .rel.text for map relocation in subprogram
+		},
+	}
+
+	for _, tt := range texttests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := setup(t, tt.elfFileName)
+			defer m.ctrl.Finish()
+			f, _ := os.Open(m.path)
+			defer f.Close()
+
+			elfFile, err := elf.NewFile(f)
+			assert.NoError(t, err)
+			elfLoader := newElfLoader(elfFile, m.ebpf_maps, m.ebpf_progs, "test", nil)
+
+			err = elfLoader.parseSection()
+			assert.NoError(t, err)
+
+			if tt.wantTextSection {
+				assert.NotNil(t, elfLoader.textSection)
+				assert.NotEqual(t, -1, elfLoader.textSectionIndex)
+			} else {
+				assert.Nil(t, elfLoader.textSection)
+				assert.Equal(t, -1, elfLoader.textSectionIndex)
+			}
+
+			if tt.wantTextRelo {
+				assert.NotNil(t, elfLoader.reloSectionMap[uint32(elfLoader.textSectionIndex)])
 			}
 		})
 	}
@@ -433,6 +496,12 @@ func TestParseProg(t *testing.T) {
 			name:        "Test prog data",
 			elfFileName: "../../test-data/tc.ingress.bpf.elf",
 			want:        3,
+			wantErr:     nil,
+		},
+		{
+			name:        "Test prog data with subprograms",
+			elfFileName: "../../test-data/tc.subprog.bpf.elf",
+			want:        1,
 			wantErr:     nil,
 		},
 		{
@@ -787,4 +856,667 @@ func TestLoadMap(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestLoadProgReturnsUnderlyingError(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	loadErr := errors.New("verifier rejected program")
+	mockBpfProgAPI := mock_ebpf_progs.NewMockBpfProgAPIs(ctrl)
+	mockBpfProgAPI.EXPECT().LoadProg(gomock.Any()).Return(-1, loadErr)
+
+	elfLoader := &elfLoader{
+		bpfProgApi: mockBpfProgAPI,
+	}
+	loadedProgData := map[string]ebpf_progs.CreateEBPFProgInput{
+		"/sys/fs/bpf/globals/aws/programs/test_prog": {
+			ProgType:   "tc_cls",
+			ProgData:   make([]byte, bpfInsDefSize),
+			PinPath:    "/sys/fs/bpf/globals/aws/programs/test_prog",
+			InsDefSize: bpfInsDefSize,
+		},
+	}
+
+	_, err := elfLoader.loadProg(loadedProgData, nil)
+	assert.Error(t, err)
+	assert.ErrorIs(t, err, loadErr)
+}
+
+func TestSubprogramParseProg(t *testing.T) {
+	m := setup(t, "../../test-data/tc.subprog.bpf.elf")
+	defer m.ctrl.Finish()
+	f, _ := os.Open(m.path)
+	defer f.Close()
+
+	elfFile, err := elf.NewFile(f)
+	assert.NoError(t, err)
+	elfLoader := newElfLoader(elfFile, m.ebpf_maps, m.ebpf_progs, "test", nil)
+
+	err = elfLoader.parseSection()
+	assert.NoError(t, err)
+
+	assert.NotNil(t, elfLoader.textSection)
+	assert.NotEqual(t, -1, elfLoader.textSectionIndex)
+	assert.NotNil(t, elfLoader.reloSectionMap[uint32(elfLoader.textSectionIndex)])
+
+	mapData, err := elfLoader.parseMap(BpfCustomData{})
+	assert.NoError(t, err)
+	assert.Equal(t, 1, len(mapData))
+
+	m.ebpf_maps.EXPECT().CreateBPFMap(gomock.Any()).Return(ebpf_maps.BpfMap{MapFD: 5}, nil).AnyTimes()
+	m.ebpf_maps.EXPECT().GetBPFmapInfo(gomock.Any()).Return(ebpf_maps.BpfMapInfo{Id: 100}, nil).AnyTimes()
+	m.ebpf_maps.EXPECT().PinMap(gomock.Any(), gomock.Any()).AnyTimes()
+	m.ebpf_maps.EXPECT().GetMapFromPinPath(gomock.Any()).AnyTimes()
+
+	loadedMaps, err := elfLoader.loadMap(mapData)
+	assert.NoError(t, err)
+	assert.Equal(t, 1, len(loadedMaps))
+
+	parsedProgData, err := elfLoader.parseProg(loadedMaps)
+	assert.NoError(t, err)
+	assert.Equal(t, 1, len(parsedProgData))
+
+	textData, err := elfLoader.textSection.Data()
+	assert.NoError(t, err)
+	textSize := len(textData)
+	assert.Greater(t, textSize, 0, ".text section should have data")
+
+	// ProgData must be the tc_cls section with .text subprograms appended.
+	for _, progInput := range parsedProgData {
+		assert.Equal(t, "tc_cls", progInput.ProgType)
+
+		var tcProgSize int
+		for idx, entry := range elfLoader.progSectionMap {
+			if entry.progType == "tc_cls" {
+				sec := elfLoader.progSectionMap[idx]
+				secData, _ := sec.progSection.Data()
+				tcProgSize = len(secData)
+				break
+			}
+		}
+		assert.Greater(t, len(progInput.ProgData), tcProgSize,
+			"Program data should include appended .text subprogram data")
+		assert.Equal(t, tcProgSize+textSize, len(progInput.ProgData),
+			"Program data should be tc_cls section + .text section")
+	}
+}
+
+// TestChainedSubprogramParseProg tests BPF programs with chained subprogram calls:
+// handle_ingress (tc_cls) -> lookup_conntrack (.text) -> do_lookup (.text)
+// This verifies that .text-internal calls (resolved by clang at compile time)
+// remain valid after .text is appended to the program section.
+func TestChainedSubprogramParseProg(t *testing.T) {
+	m := setup(t, "../../test-data/tc.subprog_chain.bpf.elf")
+	defer m.ctrl.Finish()
+	f, _ := os.Open(m.path)
+	defer f.Close()
+
+	elfFile, err := elf.NewFile(f)
+	assert.NoError(t, err)
+	elfLoader := newElfLoader(elfFile, m.ebpf_maps, m.ebpf_progs, "test", nil)
+
+	err = elfLoader.parseSection()
+	assert.NoError(t, err)
+
+	assert.NotNil(t, elfLoader.textSection)
+	assert.NotEqual(t, -1, elfLoader.textSectionIndex)
+	assert.NotNil(t, elfLoader.reloSectionMap[uint32(elfLoader.textSectionIndex)])
+
+	textData, err := elfLoader.textSection.Data()
+	assert.NoError(t, err)
+	textInsns := len(textData) / bpfInsDefSize
+	assert.Greater(t, textInsns, 2, ".text should contain multiple subprograms")
+
+	symbols, err := elfFile.Symbols()
+	assert.NoError(t, err)
+	textFuncs := map[string]elf.Symbol{}
+	for _, sym := range symbols {
+		if int(sym.Section) == elfLoader.textSectionIndex && elf.ST_TYPE(sym.Info) == elf.STT_FUNC {
+			textFuncs[sym.Name] = sym
+		}
+	}
+	assert.Contains(t, textFuncs, "lookup_conntrack")
+	assert.Contains(t, textFuncs, "do_lookup")
+
+	mapData, err := elfLoader.parseMap(BpfCustomData{})
+	assert.NoError(t, err)
+	assert.Equal(t, 1, len(mapData))
+
+	m.ebpf_maps.EXPECT().CreateBPFMap(gomock.Any()).Return(ebpf_maps.BpfMap{MapFD: 5}, nil).AnyTimes()
+	m.ebpf_maps.EXPECT().GetBPFmapInfo(gomock.Any()).Return(ebpf_maps.BpfMapInfo{Id: 100}, nil).AnyTimes()
+	m.ebpf_maps.EXPECT().PinMap(gomock.Any(), gomock.Any()).AnyTimes()
+	m.ebpf_maps.EXPECT().GetMapFromPinPath(gomock.Any()).AnyTimes()
+
+	loadedMaps, err := elfLoader.loadMap(mapData)
+	assert.NoError(t, err)
+
+	parsedProgData, err := elfLoader.parseProg(loadedMaps)
+	assert.NoError(t, err)
+	assert.Equal(t, 1, len(parsedProgData))
+
+	// Exactly one entry program (handle_ingress); pull it out of the map.
+	var progInput ebpf_progs.CreateEBPFProgInput
+	for _, p := range parsedProgData {
+		progInput = p
+	}
+	assert.Equal(t, "tc_cls", progInput.ProgType)
+
+	var tcProgSize int
+	for idx, entry := range elfLoader.progSectionMap {
+		if entry.progType == "tc_cls" {
+			secData, _ := elfLoader.progSectionMap[idx].progSection.Data()
+			tcProgSize = len(secData)
+			break
+		}
+	}
+	textSize := len(textData)
+
+	assert.Equal(t, tcProgSize+textSize, len(progInput.ProgData),
+		"Program data should be tc_cls section + .text section")
+
+	// Verify the BPF_CALL from tc_cls to lookup_conntrack has correct relocation.
+	// Scan for the BPF_CALL instruction in the tc_cls section rather than
+	// assuming a fixed offset, since clang may reorder instructions.
+	callInsnOffset := -1
+	for off := 0; off < tcProgSize; off += bpfInsDefSize {
+		if progInput.ProgData[off] == (unix.BPF_JMP|unix.BPF_CALL) && progInput.ProgData[off+1]>>4 == 1 {
+			callInsnOffset = off
+			break
+		}
+	}
+	assert.NotEqual(t, -1, callInsnOffset, "tc_cls should contain a BPF_PSEUDO_CALL instruction")
+
+	tcInsnCount := tcProgSize / bpfInsDefSize
+	lookupOffset := textFuncs["lookup_conntrack"].Value
+	expectedTargetInsn := tcInsnCount + int(lookupOffset)/bpfInsDefSize
+	expectedImm := int32(expectedTargetInsn - callInsnOffset/bpfInsDefSize - 1)
+	actualImm := int32(binary.LittleEndian.Uint32(progInput.ProgData[callInsnOffset+4 : callInsnOffset+8]))
+	assert.Equal(t, expectedImm, actualImm,
+		"BPF_CALL Imm should point to lookup_conntrack in appended .text")
+
+	// Verify .text-internal call: lookup_conntrack -> do_lookup
+	// Scan for the BPF_PSEUDO_CALL within lookup_conntrack's range in the combined data.
+	lookupStart := tcProgSize + int(lookupOffset)
+	lookupEnd := tcProgSize + textSize
+	chainCallOffset := -1
+	for off := lookupStart; off < lookupEnd; off += bpfInsDefSize {
+		if progInput.ProgData[off] == (unix.BPF_JMP|unix.BPF_CALL) && progInput.ProgData[off+1]>>4 == 1 {
+			chainCallOffset = off
+			break
+		}
+	}
+	assert.NotEqual(t, -1, chainCallOffset, "lookup_conntrack should contain a BPF_PSEUDO_CALL to do_lookup")
+
+	// The Imm for the .text-internal call should be the relative offset to do_lookup
+	doLookupOffset := textFuncs["do_lookup"].Value
+	chainCallInsnIdx := (chainCallOffset - tcProgSize) / bpfInsDefSize
+	doLookupInsnIdx := int(doLookupOffset) / bpfInsDefSize
+	expectedChainImm := int32(doLookupInsnIdx - chainCallInsnIdx - 1)
+	actualChainImm := int32(binary.LittleEndian.Uint32(progInput.ProgData[chainCallOffset+4 : chainCallOffset+8]))
+	assert.Equal(t, expectedChainImm, actualChainImm,
+		"Chained BPF_CALL Imm should point from lookup_conntrack to do_lookup within .text")
+
+	// Verify the map FD relocation was applied INSIDE the appended .text.
+	// lookup_conntrack does a bpf_map_lookup_elem on aws_conntrack_map, which
+	// compiles to a BPF_LD_IMM_DW (0x18) whose 64-bit immediate must be
+	// patched with the map FD (5, from the CreateBPFMap mock above). Find
+	// that instruction within the .text region of the combined program data
+	// and assert the FD landed in its immediate.
+	const bpfLdImmDW = byte(unix.BPF_LD | unix.BPF_IMM | unix.BPF_DW)
+	mapLoadOffset := -1
+	for off := tcProgSize; off+16 <= len(progInput.ProgData); off += bpfInsDefSize {
+		if progInput.ProgData[off] == bpfLdImmDW {
+			mapLoadOffset = off
+			break
+		}
+	}
+	assert.NotEqual(t, -1, mapLoadOffset, ".text should contain a BPF_LD_IMM_DW map load")
+	mapFD := int32(binary.LittleEndian.Uint32(progInput.ProgData[mapLoadOffset+4 : mapLoadOffset+8]))
+	assert.Equal(t, int32(5), mapFD,
+		"map FD should be patched into the BPF_LD_IMM_DW immediate inside .text")
+}
+
+// TestMultiProgramOneSectionParseProg guards against a regression where two
+// GLOBAL programs share a single ELF section. Each program is its own
+// STT_FUNC symbol with a distinct offset and size within the section; the
+// loader must slice each program by its own symbol size. Loading from a
+// program's start to the end of the whole section would make the first
+// program swallow the bytes of the second.
+func TestMultiProgramOneSectionParseProg(t *testing.T) {
+	m := setup(t, "../../test-data/tc.multi_prog_one_section.bpf.elf")
+	defer m.ctrl.Finish()
+	f, err := os.Open(m.path)
+	if !assert.NoError(t, err, "open test ELF") {
+		return
+	}
+	defer f.Close()
+
+	elfFile, err := elf.NewFile(f)
+	assert.NoError(t, err)
+	elfLoader := newElfLoader(elfFile, m.ebpf_maps, m.ebpf_progs, "test", nil)
+
+	err = elfLoader.parseSection()
+	assert.NoError(t, err)
+
+	// Both programs live in the same section, so there is exactly one prog
+	// section entry.
+	assert.Equal(t, 1, len(elfLoader.progSectionMap))
+
+	mapData, err := elfLoader.parseMap(BpfCustomData{})
+	assert.NoError(t, err)
+	assert.Equal(t, 1, len(mapData))
+
+	m.ebpf_maps.EXPECT().CreateBPFMap(gomock.Any()).Return(ebpf_maps.BpfMap{MapFD: 7}, nil).AnyTimes()
+	m.ebpf_maps.EXPECT().GetBPFmapInfo(gomock.Any()).Return(ebpf_maps.BpfMapInfo{Id: 100}, nil).AnyTimes()
+	m.ebpf_maps.EXPECT().PinMap(gomock.Any(), gomock.Any()).AnyTimes()
+	m.ebpf_maps.EXPECT().GetMapFromPinPath(gomock.Any()).AnyTimes()
+
+	loadedMaps, err := elfLoader.loadMap(mapData)
+	assert.NoError(t, err)
+
+	// Gather the two GLOBAL program symbols and their individual sizes.
+	symbols, err := elfFile.Symbols()
+	assert.NoError(t, err)
+	progSyms := map[string]elf.Symbol{}
+	for _, sym := range symbols {
+		if elf.ST_TYPE(sym.Info) == elf.STT_FUNC && elf.ST_BIND(sym.Info) == elf.STB_GLOBAL {
+			if int(sym.Section) == int(elfLoader.textSectionIndex) {
+				continue
+			}
+			progSyms[sym.Name] = sym
+		}
+	}
+	assert.Contains(t, progSyms, "prog_first")
+	assert.Contains(t, progSyms, "prog_second")
+
+	parsedProgData, err := elfLoader.parseProg(loadedMaps)
+	assert.NoError(t, err)
+	assert.Equal(t, 2, len(parsedProgData))
+
+	// Each program's bytecode must be exactly its own symbol size -- not the
+	// whole section, and not bleeding into the other program.
+	byName := map[string]ebpf_progs.CreateEBPFProgInput{}
+	for _, p := range parsedProgData {
+		// Pin path is suffixed with the program (symbol) name.
+		for name := range progSyms {
+			if strings.HasSuffix(p.PinPath, name) {
+				byName[name] = p
+			}
+		}
+	}
+	assert.Contains(t, byName, "prog_first")
+	assert.Contains(t, byName, "prog_second")
+
+	for name, sym := range progSyms {
+		assert.Equal(t, int(sym.Size), len(byName[name].ProgData),
+			"%s: program data must equal its own symbol size, not the whole section", name)
+	}
+}
+
+// TestMultiProgramOneSectionWithSubprogRejected verifies the loader hard-errors
+// on the unsupported layout: multiple GLOBAL programs sharing one section that
+// also uses .text subprograms. BPF-to-BPF call offsets are relocated relative
+// to the whole program section, which does not match the per-program trimmed
+// bytecode the loader builds, so loading must fail loudly rather than emit
+// wrong call offsets.
+func TestMultiProgramOneSectionWithSubprogRejected(t *testing.T) {
+	m := setup(t, "../../test-data/tc.multi_prog_one_section_subprog.bpf.elf")
+	defer m.ctrl.Finish()
+	f, err := os.Open(m.path)
+	if !assert.NoError(t, err, "open test ELF") {
+		return
+	}
+	defer f.Close()
+
+	elfFile, err := elf.NewFile(f)
+	assert.NoError(t, err)
+	elfLoader := newElfLoader(elfFile, m.ebpf_maps, m.ebpf_progs, "test", nil)
+
+	err = elfLoader.parseSection()
+	assert.NoError(t, err)
+
+	mapData, err := elfLoader.parseMap(BpfCustomData{})
+	assert.NoError(t, err)
+
+	m.ebpf_maps.EXPECT().CreateBPFMap(gomock.Any()).Return(ebpf_maps.BpfMap{MapFD: 7}, nil).AnyTimes()
+	m.ebpf_maps.EXPECT().GetBPFmapInfo(gomock.Any()).Return(ebpf_maps.BpfMapInfo{Id: 100}, nil).AnyTimes()
+	m.ebpf_maps.EXPECT().PinMap(gomock.Any(), gomock.Any()).AnyTimes()
+	m.ebpf_maps.EXPECT().GetMapFromPinPath(gomock.Any()).AnyTimes()
+
+	loadedMaps, err := elfLoader.loadMap(mapData)
+	assert.NoError(t, err)
+
+	// parseProg must reject this layout instead of producing programs with
+	// incorrect BPF-to-BPF call offsets.
+	_, err = elfLoader.parseProg(loadedMaps)
+	assert.Error(t, err, "shared-section + .text layout must be rejected")
+}
+
+// TestMultiSubprogramWithDistinctSubprogsRejected documents a known limitation:
+// an ELF with multiple entry programs (separate program sections) that each
+// call a different .text subprogram is not supported. The loader appends the
+// entire combined .text to every program, so each program would carry
+// subprograms it never calls and the kernel verifier rejects the load with
+// "unreachable insn". Until per-program call-graph extraction is implemented,
+// the loader must reject this layout rather than emit bytecode the kernel will
+// refuse.
+func TestMultiSubprogramWithDistinctSubprogsRejected(t *testing.T) {
+	m := setup(t, "../../test-data/tc.multi_subprog.bpf.elf")
+	defer m.ctrl.Finish()
+	f, err := os.Open(m.path)
+	if !assert.NoError(t, err, "open test ELF") {
+		return
+	}
+	defer f.Close()
+
+	elfFile, err := elf.NewFile(f)
+	assert.NoError(t, err)
+	elfLoader := newElfLoader(elfFile, m.ebpf_maps, m.ebpf_progs, "test", nil)
+
+	assert.NoError(t, elfLoader.parseSection())
+
+	mapData, err := elfLoader.parseMap(BpfCustomData{})
+	assert.NoError(t, err)
+
+	m.ebpf_maps.EXPECT().CreateBPFMap(gomock.Any()).Return(ebpf_maps.BpfMap{MapFD: 7}, nil).AnyTimes()
+	m.ebpf_maps.EXPECT().GetBPFmapInfo(gomock.Any()).Return(ebpf_maps.BpfMapInfo{Id: 100}, nil).AnyTimes()
+	m.ebpf_maps.EXPECT().PinMap(gomock.Any(), gomock.Any()).AnyTimes()
+	m.ebpf_maps.EXPECT().GetMapFromPinPath(gomock.Any()).AnyTimes()
+
+	loadedMaps, err := elfLoader.loadMap(mapData)
+	assert.NoError(t, err)
+
+	// More than one entry program + .text subprograms -> must be rejected.
+	_, err = elfLoader.parseProg(loadedMaps)
+	assert.Error(t, err, "multiple entry programs with .text subprograms must be rejected")
+}
+
+// TestTextOnlyMapAssociation guards the fix where getRelocatedTextSection must
+// report maps referenced ONLY from within a .text subprogram as associated with
+// the owning program. The fixture's textonly_map is used solely inside the
+// __noinline subprogram (it appears in .rel.text, never in the entry program's
+// .reltc_cls), so the program's AssociatedMaps name table is built entirely
+// from the .text relocation pass. Before the fix, getRelocatedTextSection
+// patched the FD but discarded the name, leaving AssociatedMaps empty and
+// breaking callers that resolve maps by name.
+func TestTextOnlyMapAssociation(t *testing.T) {
+	m := setup(t, "../../test-data/tc.subprog_textonly_map.bpf.elf")
+	defer m.ctrl.Finish()
+	f, err := os.Open(m.path)
+	if !assert.NoError(t, err, "open test ELF") {
+		return
+	}
+	defer f.Close()
+
+	elfFile, err := elf.NewFile(f)
+	assert.NoError(t, err)
+	elfLoader := newElfLoader(elfFile, m.ebpf_maps, m.ebpf_progs, "test", nil)
+
+	assert.NoError(t, elfLoader.parseSection())
+	assert.NotNil(t, elfLoader.textSection)
+	assert.NotNil(t, elfLoader.reloSectionMap[uint32(elfLoader.textSectionIndex)])
+
+	mapData, err := elfLoader.parseMap(BpfCustomData{})
+	assert.NoError(t, err)
+	assert.Equal(t, 1, len(mapData))
+
+	const textonlyFD, textonlyID = 5, 100
+	m.ebpf_maps.EXPECT().CreateBPFMap(gomock.Any()).Return(ebpf_maps.BpfMap{MapFD: textonlyFD}, nil).AnyTimes()
+	m.ebpf_maps.EXPECT().GetBPFmapInfo(gomock.Any()).Return(ebpf_maps.BpfMapInfo{Id: textonlyID}, nil).AnyTimes()
+	m.ebpf_maps.EXPECT().PinMap(gomock.Any(), gomock.Any()).AnyTimes()
+	// textonly_map is PIN_GLOBAL_NS, so loadMap resolves its ID via the pin path.
+	m.ebpf_maps.EXPECT().GetMapFromPinPath(gomock.Any()).Return(ebpf_maps.BpfMapInfo{Id: textonlyID}, nil).AnyTimes()
+
+	loadedMaps, err := elfLoader.loadMap(mapData)
+	assert.NoError(t, err)
+
+	parsedProgData, err := elfLoader.parseProg(loadedMaps)
+	assert.NoError(t, err)
+	assert.Equal(t, 1, len(parsedProgData))
+
+	// The map is referenced only from .text, yet it MUST appear in the
+	// program's associated-map name table (keyed by map ID).
+	for _, progInput := range parsedProgData {
+		assert.Contains(t, progInput.AssociatedMaps, textonlyID,
+			"textonly_map (ID %d) must be associated with the prog even though it is referenced only from .text", textonlyID)
+		assert.Equal(t, "textonly_map", progInput.AssociatedMaps[textonlyID],
+			"associated map name should be textonly_map")
+	}
+}
+
+// TestSubprogramNoMapRelocation covers a .text subprogram that references no
+// maps: clang emits a non-empty .text but no .rel.text section. This exercises
+// the "No .rel.text relocation section found" path in getRelocatedTextSection,
+// where .text must still be read and appended to the program with no map
+// relocations applied.
+func TestSubprogramNoMapRelocation(t *testing.T) {
+	m := setup(t, "../../test-data/tc.subprog_nomap.bpf.elf")
+	defer m.ctrl.Finish()
+	f, err := os.Open(m.path)
+	if !assert.NoError(t, err, "open test ELF") {
+		return
+	}
+	defer f.Close()
+
+	elfFile, err := elf.NewFile(f)
+	assert.NoError(t, err)
+	elfLoader := newElfLoader(elfFile, m.ebpf_maps, m.ebpf_progs, "test", nil)
+
+	assert.NoError(t, elfLoader.parseSection())
+	assert.NotNil(t, elfLoader.textSection)
+	// .text exists with subprogram code but there is no .rel.text section.
+	assert.Nil(t, elfLoader.reloSectionMap[uint32(elfLoader.textSectionIndex)],
+		"fixture should have no .rel.text section")
+
+	textData, err := elfLoader.textSection.Data()
+	assert.NoError(t, err)
+	textSize := len(textData)
+	assert.Greater(t, textSize, 0, ".text should contain the subprogram")
+
+	mapData, err := elfLoader.parseMap(BpfCustomData{})
+	assert.NoError(t, err)
+	assert.Equal(t, 0, len(mapData))
+	loadedMaps, err := elfLoader.loadMap(mapData)
+	assert.NoError(t, err)
+
+	parsedProgData, err := elfLoader.parseProg(loadedMaps)
+	assert.NoError(t, err)
+	assert.Equal(t, 1, len(parsedProgData))
+
+	// The subprogram must still be appended even though no .rel.text exists.
+	for _, progInput := range parsedProgData {
+		var tcProgSize int
+		for idx, entry := range elfLoader.progSectionMap {
+			if entry.progType == "tc_cls" {
+				d, _ := elfLoader.progSectionMap[idx].progSection.Data()
+				tcProgSize = len(d)
+				break
+			}
+		}
+		assert.Equal(t, tcProgSize+textSize, len(progInput.ProgData),
+			"program data should be tc_cls section + appended .text (no relocation)")
+	}
+}
+
+// TestSubprogramGlobalMapRelocation covers a map referenced only from inside a
+// .text subprogram and resolved via the sdkCache (the `sdkCache.Get` branch of
+// getRelocatedTextSection), NOT via the per-program loadedMaps argument. This is
+// the production scenario for a shared global map that was created by an earlier
+// LoadBpfFile call (global maps persist in sdkCache across loads) and is then
+// referenced by a later-loaded program's subprogram. We model it by seeding the
+// sdkCache and passing parseProg an empty loadedMaps, so the only way to resolve
+// the map FD inside .text is the cache.
+func TestSubprogramGlobalMapRelocation(t *testing.T) {
+	m := setup(t, "../../test-data/tc.subprog_globalmap.bpf.elf")
+	defer m.ctrl.Finish()
+	f, err := os.Open(m.path)
+	if !assert.NoError(t, err, "open test ELF") {
+		return
+	}
+	defer f.Close()
+
+	elfFile, err := elf.NewFile(f)
+	assert.NoError(t, err)
+	elfLoader := newElfLoader(elfFile, m.ebpf_maps, m.ebpf_progs, "", nil)
+
+	assert.NoError(t, elfLoader.parseSection())
+	assert.NotNil(t, elfLoader.reloSectionMap[uint32(elfLoader.textSectionIndex)],
+		".text should have a .rel.text map relocation")
+
+	// Seed the global cache as if this map were created by a previous load.
+	const globalFD = 4242
+	sdkCache.Set("global_subprog_map", globalFD)
+	defer sdkCache.Delete("global_subprog_map")
+
+	// Pass an EMPTY loadedMaps so the .text relocation cannot resolve the map
+	// from loadedMaps[name]; it must fall through to the sdkCache branch.
+	parsedProgData, err := elfLoader.parseProg(map[string]ebpf_maps.BpfMap{})
+	assert.NoError(t, err)
+	assert.Equal(t, 1, len(parsedProgData))
+
+	// The global map FD (from sdkCache) must be patched into the
+	// BPF_LD_IMM_DW inside the appended .text.
+	const bpfLdImmDW = byte(unix.BPF_LD | unix.BPF_IMM | unix.BPF_DW)
+	for _, progInput := range parsedProgData {
+		var tcProgSize int
+		for idx, entry := range elfLoader.progSectionMap {
+			if entry.progType == "tc_cls" {
+				d, _ := elfLoader.progSectionMap[idx].progSection.Data()
+				tcProgSize = len(d)
+				break
+			}
+		}
+		mapLoadOffset := -1
+		for off := tcProgSize; off+16 <= len(progInput.ProgData); off += bpfInsDefSize {
+			if progInput.ProgData[off] == bpfLdImmDW {
+				mapLoadOffset = off
+				break
+			}
+		}
+		assert.NotEqual(t, -1, mapLoadOffset, ".text should contain a BPF_LD_IMM_DW map load")
+		gotFD := int32(binary.LittleEndian.Uint32(progInput.ProgData[mapLoadOffset+4 : mapLoadOffset+8]))
+		assert.Equal(t, int32(globalFD), gotFD,
+			"global map FD (from sdkCache) should be patched into the .text map load")
+	}
+}
+
+// TestSubprogramRealKernelLoad loads the .text subprogram fixtures into the
+// REAL kernel (no mocks): it creates the maps, applies .text relocations, and
+// the kernel verifier must accept the assembled bytecode. This is the strongest
+// guard for the .text feature -- the parse-level tests assert byte/metadata
+// transforms, but only a real load proves the relocated program actually
+// verifies and that prog->map association (built from the kernel FD query)
+// includes maps referenced only from .text. Requires root; skipped otherwise.
+func TestSubprogramRealKernelLoad(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("requires root to create maps and load programs into the kernel")
+	}
+	assert.NoError(t, utils.Mount_bpf_fs())
+	defer utils.Unmount_bpf_fs()
+
+	tests := []struct {
+		name        string
+		elf         string
+		pinPrefix   string
+		wantProgs   int
+		wantMaps    int
+		wantMapName string // a map that must appear in the loaded prog's Maps
+	}{
+		{
+			name:        "single subprogram with map in .text",
+			elf:         "../../test-data/tc.subprog.bpf.elf",
+			pinPrefix:   "rk_subprog",
+			wantProgs:   1,
+			wantMaps:    1,
+			wantMapName: "aws_conntrack_map",
+		},
+		{
+			name:        "chained subprograms",
+			elf:         "../../test-data/tc.subprog_chain.bpf.elf",
+			pinPrefix:   "rk_chain",
+			wantProgs:   1,
+			wantMaps:    1,
+			wantMapName: "aws_conntrack_map",
+		},
+		{
+			name:        "map referenced only from .text subprogram",
+			elf:         "../../test-data/tc.subprog_textonly_map.bpf.elf",
+			pinPrefix:   "rk_textonly",
+			wantProgs:   1,
+			wantMaps:    1,
+			wantMapName: "textonly_map",
+		},
+		{
+			name:      "subprogram with no map relocation",
+			elf:       "../../test-data/tc.subprog_nomap.bpf.elf",
+			pinPrefix: "rk_nomap",
+			wantProgs: 1,
+			wantMaps:  0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client := New(Config{NamespacedMaps: testNamespacedMaps})
+			progs, maps, err := client.LoadBpfFile(tt.elf, tt.pinPrefix)
+			// Best-effort cleanup of the pins this load created.
+			defer func() {
+				for p := range progs {
+					_ = os.Remove(p)
+				}
+				for _, mp := range maps {
+					if mp.MapMetaData.PinOptions != nil {
+						_ = os.Remove(mp.MapMetaData.PinOptions.PinPath)
+					}
+				}
+			}()
+
+			assert.NoError(t, err, "real-kernel load (verifier must accept relocated .text)")
+			assert.Equal(t, tt.wantProgs, len(progs), "loaded program count")
+			assert.Equal(t, tt.wantMaps, len(maps), "loaded map count")
+
+			if tt.wantMapName != "" {
+				// The map (including one referenced only from .text) must be
+				// associated with the loaded program via the kernel FD query.
+				found := false
+				for _, d := range progs {
+					if _, ok := d.Maps[tt.wantMapName]; ok {
+						found = true
+					}
+				}
+				assert.True(t, found,
+					"map %q must be associated with the loaded program", tt.wantMapName)
+			}
+		})
+	}
+}
+
+// TestSubprogramInCustomSectionRejected verifies a call to a subprogram outside
+// .text (custom-section __noinline) is rejected rather than mis-relocated.
+func TestSubprogramInCustomSectionRejected(t *testing.T) {
+	m := setup(t, "../../test-data/tc.subprog_badsection.bpf.elf")
+	defer m.ctrl.Finish()
+	f, err := os.Open(m.path)
+	if !assert.NoError(t, err, "open test ELF") {
+		return
+	}
+	defer f.Close()
+
+	elfFile, err := elf.NewFile(f)
+	assert.NoError(t, err)
+	elfLoader := newElfLoader(elfFile, m.ebpf_maps, m.ebpf_progs, "test", nil)
+	assert.NoError(t, elfLoader.parseSection())
+
+	mapData, err := elfLoader.parseMap(BpfCustomData{})
+	assert.NoError(t, err)
+	m.ebpf_maps.EXPECT().CreateBPFMap(gomock.Any()).Return(ebpf_maps.BpfMap{MapFD: 5}, nil).AnyTimes()
+	m.ebpf_maps.EXPECT().GetBPFmapInfo(gomock.Any()).Return(ebpf_maps.BpfMapInfo{Id: 100}, nil).AnyTimes()
+	m.ebpf_maps.EXPECT().PinMap(gomock.Any(), gomock.Any()).AnyTimes()
+	m.ebpf_maps.EXPECT().GetMapFromPinPath(gomock.Any()).AnyTimes()
+	loadedMaps, err := elfLoader.loadMap(mapData)
+	assert.NoError(t, err)
+
+	_, err = elfLoader.parseProg(loadedMaps)
+	assert.Error(t, err, "call to a subprogram outside .text must be rejected")
 }

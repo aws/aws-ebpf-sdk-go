@@ -15,11 +15,11 @@
 package progs
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
-	"strings"
 	"syscall"
 	"unsafe"
 
@@ -187,10 +187,14 @@ func (m *BpfProgram) UnPinProg(pinPath string) error {
 	return unix.Close(int(m.ProgFD))
 }
 
-func parseLogs(log []byte) []string {
-	logStr := string(log)
-	logs := strings.Split(logStr, "\n")
-	return logs
+// verifierLogString returns the verifier message up to the first NUL,
+// converting only that prefix (not the whole ~16 MiB NUL-padded buffer).
+func verifierLogString(logBuf []byte) string {
+	end := bytes.IndexByte(logBuf, 0)
+	if end < 0 {
+		end = len(logBuf)
+	}
+	return string(logBuf[:end])
 }
 
 func (m *BpfProgram) LoadProg(progMetaData CreateEBPFProgInput) (int, error) {
@@ -233,12 +237,13 @@ func (m *BpfProgram) LoadProg(progMetaData CreateEBPFProgInput) (int, error) {
 		unsafe.Sizeof(program))
 	runtime.KeepAlive(progMetaData.ProgData)
 	runtime.KeepAlive(license)
+	runtime.KeepAlive(logBuf)
 
-	log.Infof("Load prog done with fd : %d", int(fd))
+	log.Infof("Load prog done with fd : %d errno: %d (%s) insnCnt: %d attrSize: %d progType: %d", int(fd), int(errno), errno.Error(), program.InsnCnt, unsafe.Sizeof(program), program.ProgType)
 	if errno != 0 {
-		logArray := parseLogs(logBuf)
-		for _, str := range logArray {
-			fmt.Println(str)
+		// Surface the verifier log captured during the load above for diagnostics.
+		if verifierLog := verifierLogString(logBuf); len(verifierLog) > 0 {
+			log.Infof("Verifier log: %s", verifierLog)
 		}
 		return -1, errno
 	}
