@@ -15,6 +15,7 @@
 package progs
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -188,6 +189,12 @@ func (m *BpfProgram) UnPinProg(pinPath string) error {
 }
 
 func parseLogs(log []byte) []string {
+	// The verifier writes a NUL-terminated string into the head of the buffer;
+	// trim there so the zero-filled tail (up to ~16MiB) is not returned as one
+	// giant "line".
+	if i := bytes.IndexByte(log, 0); i != -1 {
+		log = log[:i]
+	}
 	logStr := string(log)
 	logs := strings.Split(logStr, "\n")
 	return logs
