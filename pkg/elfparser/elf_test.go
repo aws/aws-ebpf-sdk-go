@@ -42,6 +42,28 @@ var testNamespacedMaps = []string{
 	"egress_pod_state_map", "cp_ingress_map", "cp_egress_map", "ipcache_map",
 }
 
+var testGlobalMaps = []string{"aws_conntrack_map", "policy_events"}
+
+const testGlobalPinPrefix = "global"
+
+// testClassifier builds the pin-path classifier the SDK would normally receive
+// from its caller via Config.
+func testClassifier() mapClassifier {
+	nsSet := make(map[string]struct{}, len(testNamespacedMaps))
+	for _, m := range testNamespacedMaps {
+		nsSet[m] = struct{}{}
+	}
+	globalSet := make(map[string]struct{}, len(testGlobalMaps))
+	for _, m := range testGlobalMaps {
+		globalSet[m] = struct{}{}
+	}
+	return mapClassifier{
+		namespacedMaps:  nsSet,
+		globalMaps:      globalSet,
+		globalPinPrefix: testGlobalPinPrefix,
+	}
+}
+
 var (
 	MAP_SECTION_INDEX = 8
 	MAP_TYPE_1        = int(constdef.BPF_MAP_TYPE_LRU_HASH.Index())
@@ -124,7 +146,7 @@ func TestLoad(t *testing.T) {
 
 			elfFile, err := elf.NewFile(f)
 			assert.NoError(t, err)
-			elfLoader := newElfLoader(elfFile, m.ebpf_maps, m.ebpf_progs, "test", nil)
+			elfLoader := newElfLoader(elfFile, m.ebpf_maps, m.ebpf_progs, "test", testClassifier())
 			loadedProgs, loadedMaps, err := elfLoader.doLoadELF(BpfCustomData{})
 			assert.NoError(t, err)
 			assert.Equal(t, tt.wantProg, len(loadedProgs))
@@ -164,7 +186,7 @@ func TestParseSection(t *testing.T) {
 
 			elfFile, err := elf.NewFile(f)
 			assert.NoError(t, err)
-			elfLoader := newElfLoader(elfFile, m.ebpf_maps, m.ebpf_progs, "test", nil)
+			elfLoader := newElfLoader(elfFile, m.ebpf_maps, m.ebpf_progs, "test", testClassifier())
 
 			err = elfLoader.parseSection()
 			if tt.wantErr != nil {
@@ -206,7 +228,7 @@ func TestParseSection(t *testing.T) {
 
 			elfFile, err := elf.NewFile(f)
 			assert.NoError(t, err)
-			elfLoader := newElfLoader(elfFile, m.ebpf_maps, m.ebpf_progs, "test", nil)
+			elfLoader := newElfLoader(elfFile, m.ebpf_maps, m.ebpf_progs, "test", testClassifier())
 
 			err = elfLoader.parseSection()
 			if tt.wantErr != nil {
@@ -247,7 +269,7 @@ func TestParseSection(t *testing.T) {
 
 			elfFile, err := elf.NewFile(f)
 			assert.NoError(t, err)
-			elfLoader := newElfLoader(elfFile, m.ebpf_maps, m.ebpf_progs, "test", nil)
+			elfLoader := newElfLoader(elfFile, m.ebpf_maps, m.ebpf_progs, "test", testClassifier())
 
 			err = elfLoader.parseSection()
 			assert.NoError(t, err)
@@ -295,7 +317,7 @@ func TestParseSection(t *testing.T) {
 
 			elfFile, err := elf.NewFile(f)
 			assert.NoError(t, err)
-			elfLoader := newElfLoader(elfFile, m.ebpf_maps, m.ebpf_progs, "test", nil)
+			elfLoader := newElfLoader(elfFile, m.ebpf_maps, m.ebpf_progs, "test", testClassifier())
 
 			err = elfLoader.parseSection()
 			if tt.wantErr != nil {
@@ -345,7 +367,7 @@ func TestParseSection(t *testing.T) {
 
 			elfFile, err := elf.NewFile(f)
 			assert.NoError(t, err)
-			elfLoader := newElfLoader(elfFile, m.ebpf_maps, m.ebpf_progs, "test", nil)
+			elfLoader := newElfLoader(elfFile, m.ebpf_maps, m.ebpf_progs, "test", testClassifier())
 
 			err = elfLoader.parseSection()
 			if tt.wantErr != nil {
@@ -402,7 +424,7 @@ func TestParseMap(t *testing.T) {
 
 			elfFile, err := elf.NewFile(f)
 			assert.NoError(t, err)
-			elfLoader := newElfLoader(elfFile, m.ebpf_maps, m.ebpf_progs, "test", nil)
+			elfLoader := newElfLoader(elfFile, m.ebpf_maps, m.ebpf_progs, "test", testClassifier())
 
 			err = elfLoader.parseSection()
 			assert.NoError(t, err)
@@ -450,7 +472,7 @@ func TestParseMap(t *testing.T) {
 			var parsedMapData []int
 			elfFile, err := elf.NewFile(f)
 			assert.NoError(t, err)
-			elfLoader := newElfLoader(elfFile, m.ebpf_maps, m.ebpf_progs, "test", nil)
+			elfLoader := newElfLoader(elfFile, m.ebpf_maps, m.ebpf_progs, "test", testClassifier())
 
 			err = elfLoader.parseSection()
 			assert.NoError(t, err)
@@ -529,7 +551,7 @@ func TestParseProg(t *testing.T) {
 
 			elfFile, err := elf.NewFile(f)
 			assert.NoError(t, err)
-			elfLoader := newElfLoader(elfFile, m.ebpf_maps, m.ebpf_progs, "test", nil)
+			elfLoader := newElfLoader(elfFile, m.ebpf_maps, m.ebpf_progs, "test", testClassifier())
 
 			err = elfLoader.parseSection()
 			assert.NoError(t, err)
@@ -612,7 +634,7 @@ func TestRecovery(t *testing.T) {
 			m := setup(t, tt.elfFileName)
 			defer m.ctrl.Finish()
 
-			bpfSDKclient := New(Config{NamespacedMaps: testNamespacedMaps})
+			bpfSDKclient := New(Config{NamespacedMaps: testNamespacedMaps, GlobalMaps: testGlobalMaps, GlobalPinPrefix: testGlobalPinPrefix})
 
 			if tt.recoverGlobal {
 				_, _, err := bpfSDKclient.LoadBpfFile(m.path, "global")
@@ -626,7 +648,10 @@ func TestRecovery(t *testing.T) {
 					assert.Equal(t, tt.wantMap, len(recoveredMaps))
 				}
 			} else {
-				_, _, err := bpfSDKclient.LoadBpfFile(m.path, "test")
+				// Pin with a "<podName>@<namespace>" identifier, matching the
+				// format the agent uses. Legacy "-" identifiers produce pins the
+				// recovery path deliberately skips as unparseable.
+				_, _, err := bpfSDKclient.LoadBpfFile(m.path, "test@default")
 				if err != nil {
 					assert.NoError(t, err)
 				}
@@ -639,6 +664,171 @@ func TestRecovery(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func closeBpfDataFDs(t *testing.T, programs map[string]BpfData, maps map[string]ebpf_maps.BpfMap) {
+	t.Helper()
+
+	fds := make(map[int]struct{})
+	for _, data := range programs {
+		if data.Program.ProgFD > 0 {
+			fds[data.Program.ProgFD] = struct{}{}
+		}
+		for _, bpfMap := range data.Maps {
+			if bpfMap.MapFD > 0 {
+				fds[int(bpfMap.MapFD)] = struct{}{}
+			}
+		}
+	}
+	for _, bpfMap := range maps {
+		if bpfMap.MapFD > 0 {
+			fds[int(bpfMap.MapFD)] = struct{}{}
+		}
+	}
+	for fd := range fds {
+		assert.NoError(t, unix.Close(fd))
+	}
+}
+
+func clearTestGlobalMapCache() {
+	for _, mapName := range testGlobalMaps {
+		sdkCache.Delete(mapName)
+	}
+}
+
+func TestRecoverAllBpfProgramsAndMapsReturnsPartialResults(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("requires root to load and recover BPF objects")
+	}
+	if !assert.NoError(t, utils.Mount_bpf_fs()) {
+		return
+	}
+	defer func() {
+		assert.NoError(t, utils.Unmount_bpf_fs())
+	}()
+
+	// Prevent global-map FDs cached by another real-kernel test from changing
+	// which FD source this recovery exercises.
+	clearTestGlobalMapCache()
+	defer clearTestGlobalMapCache()
+
+	client := New(Config{
+		NamespacedMaps:  testNamespacedMaps,
+		GlobalMaps:      testGlobalMaps,
+		GlobalPinPrefix: testGlobalPinPrefix,
+	})
+
+	// These BPF pins deliberately use the unsupported legacy filename format
+	// and sort before the valid pins below. Recovery must report them but
+	// continue walking and recover all later entries.
+	malformedPrograms, malformedMaps, err := client.LoadBpfFile(
+		"../../test-data/recoverydata.bpf.elf",
+		"aaa-legacy",
+	)
+	if !assert.NoError(t, err) {
+		return
+	}
+	closeBpfDataFDs(t, malformedPrograms, malformedMaps)
+
+	validPrograms, validMaps, err := client.LoadBpfFile(
+		"../../test-data/recoverydata.bpf.elf",
+		"zzz@default",
+	)
+	if !assert.NoError(t, err) {
+		return
+	}
+	closeBpfDataFDs(t, validPrograms, validMaps)
+
+	recovered, err := client.RecoverAllBpfProgramsAndMaps()
+	defer closeBpfDataFDs(t, recovered, nil)
+
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "partial recovery")
+	assert.Contains(t, err.Error(), "aaa-legacy")
+	assert.Equal(t, len(validPrograms), len(recovered))
+
+	for pinPath, expected := range validPrograms {
+		actual, ok := recovered[pinPath]
+		if !assert.True(t, ok, "valid program %s should be recovered", pinPath) {
+			continue
+		}
+		assert.NotZero(t, actual.Program.ProgFD)
+		assert.Equal(t, len(expected.Maps), len(actual.Maps))
+		for mapName := range expected.Maps {
+			recoveredMap, ok := actual.Maps[mapName]
+			assert.True(t, ok, "map %s for program %s should be recovered", mapName, pinPath)
+			if ok {
+				assert.NotZero(t, recoveredMap.MapFD)
+			}
+		}
+	}
+
+	for pinPath := range malformedPrograms {
+		assert.NotContains(t, recovered, pinPath)
+	}
+}
+
+func TestRecoverAllBpfProgramsAndMapsDropsProgramWithMissingMap(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("requires root to load and recover BPF objects")
+	}
+	if !assert.NoError(t, utils.Mount_bpf_fs()) {
+		return
+	}
+	defer func() {
+		assert.NoError(t, utils.Unmount_bpf_fs())
+	}()
+
+	clearTestGlobalMapCache()
+	defer clearTestGlobalMapCache()
+
+	client := New(Config{
+		NamespacedMaps:  testNamespacedMaps,
+		GlobalMaps:      testGlobalMaps,
+		GlobalPinPrefix: testGlobalPinPrefix,
+	})
+
+	loadedPrograms, loadedMaps, err := client.LoadBpfFile(
+		"../../test-data/recoverydata.bpf.elf",
+		"partial@default",
+	)
+	if !assert.NoError(t, err) {
+		return
+	}
+
+	// A pinned program retains its kernel reference to a map after the map pin
+	// is removed. Recovery can therefore still inspect handle_ingress and learn
+	// its map ID, but cannot recover that map from the map pin directory.
+	missingMapPin := constdef.MAP_BPF_FS + "partial@default_ingress_map"
+	if !assert.NoError(t, os.Remove(missingMapPin)) {
+		closeBpfDataFDs(t, loadedPrograms, loadedMaps)
+		return
+	}
+	closeBpfDataFDs(t, loadedPrograms, loadedMaps)
+
+	recovered, err := client.RecoverAllBpfProgramsAndMaps()
+	defer closeBpfDataFDs(t, recovered, nil)
+
+	missingProgramPin := constdef.PROG_BPF_FS + "partial@default_handle_ingress"
+	if assert.Error(t, err) {
+		assert.Contains(t, err.Error(), "partial recovery")
+		assert.Contains(t, err.Error(), missingProgramPin)
+		assert.Contains(t, err.Error(), "no recovered maps for partial@default")
+	}
+	assert.NotContains(t, recovered, missingProgramPin)
+	assert.Equal(t, len(loadedPrograms)-1, len(recovered))
+
+	for pinPath, expected := range loadedPrograms {
+		if pinPath == missingProgramPin {
+			continue
+		}
+		actual, ok := recovered[pinPath]
+		if !assert.True(t, ok, "program %s without the missing map should be recovered", pinPath) {
+			continue
+		}
+		assert.NotZero(t, actual.Program.ProgFD)
+		assert.Equal(t, len(expected.Maps), len(actual.Maps))
 	}
 }
 
@@ -655,19 +845,114 @@ func TestGetMapNameFromBPFPinPath(t *testing.T) {
 		{
 			name: "Ingress Map Pinpath",
 			args: args{
-				pinPath: "/sys/fs/bpf/globals/aws/maps/hello-udp-748dc8d996-default_ingress_map",
+				pinPath: "/sys/fs/bpf/globals/aws/maps/hello-udp-748dc8d996@default_ingress_map",
 			},
-			want: [2]string{"ingress_map", "hello-udp-748dc8d996-default"},
+			want: [2]string{"ingress_map", "hello-udp-748dc8d996@default"},
 		},
 		{
 			name: "Egress Map Pinpath",
 			args: args{
-				pinPath: "/sys/fs/bpf/globals/aws/maps/hello-udp-748dc8d996-default_egress_map",
+				pinPath: "/sys/fs/bpf/globals/aws/maps/hello-udp-748dc8d996@default_egress_map",
 			},
-			want: [2]string{"egress_map", "hello-udp-748dc8d996-default"},
+			want: [2]string{"egress_map", "hello-udp-748dc8d996@default"},
+		},
+		{
+			// Multi-segment map name: the boundary is the first "_" after the "@",
+			// so the whole "ingress_pod_state_map" must come back intact.
+			name: "Multi segment map name",
+			args: args{
+				pinPath: "/sys/fs/bpf/globals/aws/maps/hello-udp-748dc8d996@default_ingress_pod_state_map",
+			},
+			want: [2]string{"ingress_pod_state_map", "hello-udp-748dc8d996@default"},
+		},
+		{
+			name: "Cluster policy map name",
+			args: args{
+				pinPath: "/sys/fs/bpf/globals/aws/maps/hello-udp-748dc8d996@default_cp_egress_map",
+			},
+			want: [2]string{"cp_egress_map", "hello-udp-748dc8d996@default"},
+		},
+		{
+			// Pod names containing dots become underscores in the identifier, so
+			// the identifier itself contains underscores. Splitting on the FIRST
+			// underscore would truncate it - this is the regression case.
+			name: "Pod identifier containing underscores",
+			args: args{
+				pinPath: "/sys/fs/bpf/globals/aws/maps/my-app-1_2_3-abc1234-up-2026_01_0001@default_cp_egress_map",
+			},
+			want: [2]string{"cp_egress_map", "my-app-1_2_3-abc1234-up-2026_01_0001@default"},
+		},
+		{
+			name: "Global conntrack map",
+			args: args{
+				pinPath: "/sys/fs/bpf/globals/aws/maps/global_aws_conntrack_map",
+			},
+			want: [2]string{"aws_conntrack_map", "aws_conntrack_map"},
+		},
+		{
+			name: "Global policy events map",
+			args: args{
+				pinPath: "/sys/fs/bpf/globals/aws/maps/global_policy_events",
+			},
+			want: [2]string{"policy_events", "policy_events"},
+		},
+		{
+			// A namespace literally named "global" must not be mistaken for a
+			// global pin: the "@" branch matches first.
+			name: "Namespace named global",
+			args: args{
+				pinPath: "/sys/fs/bpf/globals/aws/maps/hello-udp-748dc8d996@global_ingress_map",
+			},
+			want: [2]string{"ingress_map", "hello-udp-748dc8d996@global"},
+		},
+		{
+			// Pre-"@" pin the one-shot legacy migration did not rename. It cannot
+			// be split unambiguously, so neither value is returned and the caller
+			// skips it rather than registering a truncated identifier.
+			name: "Legacy pin format is not guessed at",
+			args: args{
+				pinPath: "/sys/fs/bpf/globals/aws/maps/hello-udp-748dc8d996-default_ingress_map",
+			},
+			want: [2]string{"", ""},
+		},
+		{
+			// Legacy pin whose namespace happens to be "global" must also not be
+			// mistaken for a global pin - the prefix comparison is exact.
+			name: "Legacy pin with namespace named global",
+			args: args{
+				pinPath: "/sys/fs/bpf/globals/aws/maps/hello-udp-748dc8d996-global_ingress_map",
+			},
+			want: [2]string{"", ""},
+		},
+		{
+			// A pod named "global.abc" yields the identifier "global_abc@<ns>", so
+			// an unmigrated legacy pin for it starts with "global_". It must not be
+			// accepted as a global pin: the remainder is not a configured global map
+			// name.
+			name: "Legacy pin for a pod named global.abc",
+			args: args{
+				pinPath: "/sys/fs/bpf/globals/aws/maps/global_abc-default_ingress_map",
+			},
+			want: [2]string{"", ""},
+		},
+		{
+			// Same pod, migrated: the "@" branch handles it and the identifier keeps
+			// its underscore.
+			name: "Migrated pin for a pod named global.abc",
+			args: args{
+				pinPath: "/sys/fs/bpf/globals/aws/maps/global_abc@default_ingress_map",
+			},
+			want: [2]string{"ingress_map", "global_abc@default"},
+		},
+		{
+			name: "No separator at all",
+			args: args{
+				pinPath: "/sys/fs/bpf/globals/aws/maps/garbage",
+			},
+			want: [2]string{"", ""},
 		},
 	}
-	client := New(Config{NamespacedMaps: testNamespacedMaps}).(*bpfSDKClient)
+	client := New(Config{NamespacedMaps: testNamespacedMaps, GlobalMaps: testGlobalMaps, GlobalPinPrefix: testGlobalPinPrefix}).(*bpfSDKClient)
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got1, got2 := client.GetMapNameFromBPFPinPath(tt.args.pinPath)
@@ -690,26 +975,36 @@ func TestMapGlobal(t *testing.T) {
 		{
 			name: "Ingress Map",
 			args: args{
-				pinPath: "/sys/fs/bpf/globals/aws/maps/hello-udp-748dc8d996-default_ingress_map",
+				pinPath: "/sys/fs/bpf/globals/aws/maps/hello-udp-748dc8d996@default_ingress_map",
 			},
 			want: false,
 		},
 		{
 			name: "Egress Map",
 			args: args{
-				pinPath: "/sys/fs/bpf/globals/aws/maps/hello-udp-748dc8d996-default_egress_map",
+				pinPath: "/sys/fs/bpf/globals/aws/maps/hello-udp-748dc8d996@default_egress_map",
 			},
 			want: false,
 		},
 		{
-			name: "Global",
+			name: "Global conntrack map",
 			args: args{
-				pinPath: "/sys/fs/bpf/globals/aws/maps/test_global",
+				pinPath: "/sys/fs/bpf/globals/aws/maps/global_aws_conntrack_map",
 			},
 			want: true,
 		},
+		{
+			// An unparseable pin is neither namespaced nor global. It must not be
+			// reported as global, or RecoverGlobalMaps would pick it up and cache
+			// it under an empty name.
+			name: "Unparseable pin is not global",
+			args: args{
+				pinPath: "/sys/fs/bpf/globals/aws/maps/hello-udp-748dc8d996-default_ingress_map",
+			},
+			want: false,
+		},
 	}
-	client := New(Config{NamespacedMaps: testNamespacedMaps}).(*bpfSDKClient)
+	client := New(Config{NamespacedMaps: testNamespacedMaps, GlobalMaps: testGlobalMaps, GlobalPinPrefix: testGlobalPinPrefix}).(*bpfSDKClient)
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got := client.IsMapGlobal(tt.args.pinPath)
@@ -718,30 +1013,128 @@ func TestMapGlobal(t *testing.T) {
 	}
 }
 
-func TestMapClassifier(t *testing.T) {
-	mc := mapClassifier{
-		namespacedMaps: map[string]struct{}{
-			"ingress_map": {},
-			"egress_map":  {},
+func TestGetProgIdentifierFromBPFPinPath(t *testing.T) {
+	tests := []struct {
+		name           string
+		pinPath        string
+		wantIdentifier string
+		wantProgName   string
+		wantGlobal     bool
+	}{
+		{
+			name:           "Ingress prog",
+			pinPath:        "/sys/fs/bpf/globals/aws/programs/hello-udp-748dc8d996@default_handle_ingress",
+			wantIdentifier: "hello-udp-748dc8d996@default",
+			wantProgName:   "handle_ingress",
+		},
+		{
+			name:           "Egress prog",
+			pinPath:        "/sys/fs/bpf/globals/aws/programs/hello-udp-748dc8d996@default_handle_egress",
+			wantIdentifier: "hello-udp-748dc8d996@default",
+			wantProgName:   "handle_egress",
+		},
+		{
+			// The regression case: an identifier containing underscores, from a pod
+			// name that contained dots.
+			name:           "Pod identifier containing underscores",
+			pinPath:        "/sys/fs/bpf/globals/aws/programs/my-app-1_2_3-abc1234-up-2026_01_0001@default_handle_ingress",
+			wantIdentifier: "my-app-1_2_3-abc1234-up-2026_01_0001@default",
+			wantProgName:   "handle_ingress",
+		},
+		{
+			// A pod named "global.abcd" yields the identifier "global_abcd@<ns>",
+			// which starts with the global pin prefix but is a real pod. The "@"
+			// disambiguates it from a node-wide pin.
+			name:           "Pod whose name starts with global prefix is still a pod",
+			pinPath:        "/sys/fs/bpf/globals/aws/programs/global_abcd@default_handle_ingress",
+			wantIdentifier: "global_abcd@default",
+			wantProgName:   "handle_ingress",
+		},
+		{
+			// Legacy format with underscores in the identifier (from dot conversion)
+			// and the old "-" separator. Must not be parsed as the new "@" format.
+			name:    "Legacy format with underscores in identifier",
+			pinPath: "/sys/fs/bpf/globals/aws/programs/ylinux_app-75f4596489-k8s-omega-aws--nonprod-omega--test_handle_ingress",
+		},
+		{
+			name:         "Global prog is reported as global",
+			pinPath:      "/sys/fs/bpf/globals/aws/programs/global_handle_events",
+			wantProgName: "handle_events",
+			wantGlobal:   true,
+		},
+		{
+			name:           "Namespace named global is not a global prog",
+			pinPath:        "/sys/fs/bpf/globals/aws/programs/hello-udp-748dc8d996@global_handle_ingress",
+			wantIdentifier: "hello-udp-748dc8d996@global",
+			wantProgName:   "handle_ingress",
+		},
+		{
+			name:    "Legacy pin format is not guessed at",
+			pinPath: "/sys/fs/bpf/globals/aws/programs/hello-udp-748dc8d996-default_handle_ingress",
+		},
+		{
+			// Must not panic: the old implementation indexed [1] after splitting
+			// into at most two parts.
+			name:    "No separator at all",
+			pinPath: "/sys/fs/bpf/globals/aws/programs/garbage",
+		},
+		{
+			// Unexpected path depth should still parse correctly (only the
+			// basename matters).
+			name:           "Unexpected path depth",
+			pinPath:        "/tmp/hello-udp-748dc8d996@default_handle_ingress",
+			wantIdentifier: "hello-udp-748dc8d996@default",
+			wantProgName:   "handle_ingress",
+		},
+		{
+			// An unrecognized suffix that doesn't match handle_ingress or
+			// handle_egress. The function still parses it — it doesn't validate
+			// the prog name, just splits on the format boundary.
+			name:           "Unrecognized prog name suffix still parsed",
+			pinPath:        "/sys/fs/bpf/globals/aws/programs/hello-udp-748dc8d996@default_handle_unknown",
+			wantIdentifier: "hello-udp-748dc8d996@default",
+			wantProgName:   "handle_unknown",
 		},
 	}
 
+	client := New(Config{NamespacedMaps: testNamespacedMaps, GlobalMaps: testGlobalMaps, GlobalPinPrefix: testGlobalPinPrefix}).(*bpfSDKClient)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotIdentifier, gotProgName, gotGlobal := client.GetProgIdentifierFromBPFPinPath(tt.pinPath)
+			assert.Equal(t, tt.wantIdentifier, gotIdentifier)
+			assert.Equal(t, tt.wantProgName, gotProgName)
+			assert.Equal(t, tt.wantGlobal, gotGlobal)
+		})
+	}
+}
+
+func TestMapClassifier(t *testing.T) {
+	mc := testClassifier()
+
 	assert.True(t, mc.isNamespacedMap("ingress_map"))
 	assert.False(t, mc.isNamespacedMap("policy_events"))
+	assert.True(t, mc.isGlobalMap("policy_events"))
+	assert.False(t, mc.isGlobalMap("ingress_map"))
 
-	name, ns := mc.GetMapNameFromBPFPinPath("/sys/fs/bpf/globals/aws/maps/pod-abc-default_ingress_map")
+	// Per-pod pins use the "<podName>@<namespace>_<mapName>" format.
+	name, ns := mc.GetMapNameFromBPFPinPath("/sys/fs/bpf/globals/aws/maps/pod-abc@default_ingress_map")
 	assert.Equal(t, "ingress_map", name)
-	assert.Equal(t, "pod-abc-default", ns)
+	assert.Equal(t, "pod-abc@default", ns)
 
+	// Global pins are "<globalPinPrefix>_<mapName>" with a configured global map name.
 	name, ns = mc.GetMapNameFromBPFPinPath("/sys/fs/bpf/globals/aws/maps/global_policy_events")
 	assert.Equal(t, "policy_events", name)
 	assert.Equal(t, "policy_events", ns)
 
-	assert.False(t, mc.IsMapGlobal("/sys/fs/bpf/globals/aws/maps/pod-abc-default_ingress_map"))
+	assert.False(t, mc.IsMapGlobal("/sys/fs/bpf/globals/aws/maps/pod-abc@default_ingress_map"))
 	assert.True(t, mc.IsMapGlobal("/sys/fs/bpf/globals/aws/maps/global_policy_events"))
 
+	// A classifier with no configured global maps reports nothing as global:
+	// IsMapGlobal is a positive check against the configured global map names,
+	// so unrecognized pins are never treated as global.
 	empty := mapClassifier{namespacedMaps: map[string]struct{}{}}
-	assert.True(t, empty.IsMapGlobal("/sys/fs/bpf/globals/aws/maps/pod-abc-default_ingress_map"))
+	assert.False(t, empty.IsMapGlobal("/sys/fs/bpf/globals/aws/maps/pod-abc@default_ingress_map"))
+	assert.False(t, empty.IsMapGlobal("/sys/fs/bpf/globals/aws/maps/global_policy_events"))
 }
 
 func TestProgType(t *testing.T) {
@@ -892,7 +1285,7 @@ func TestSubprogramParseProg(t *testing.T) {
 
 	elfFile, err := elf.NewFile(f)
 	assert.NoError(t, err)
-	elfLoader := newElfLoader(elfFile, m.ebpf_maps, m.ebpf_progs, "test", nil)
+	elfLoader := newElfLoader(elfFile, m.ebpf_maps, m.ebpf_progs, "test", testClassifier())
 
 	err = elfLoader.parseSection()
 	assert.NoError(t, err)
@@ -955,7 +1348,7 @@ func TestChainedSubprogramParseProg(t *testing.T) {
 
 	elfFile, err := elf.NewFile(f)
 	assert.NoError(t, err)
-	elfLoader := newElfLoader(elfFile, m.ebpf_maps, m.ebpf_progs, "test", nil)
+	elfLoader := newElfLoader(elfFile, m.ebpf_maps, m.ebpf_progs, "test", testClassifier())
 
 	err = elfLoader.parseSection()
 	assert.NoError(t, err)
@@ -1095,7 +1488,7 @@ func TestMultiProgramOneSectionParseProg(t *testing.T) {
 
 	elfFile, err := elf.NewFile(f)
 	assert.NoError(t, err)
-	elfLoader := newElfLoader(elfFile, m.ebpf_maps, m.ebpf_progs, "test", nil)
+	elfLoader := newElfLoader(elfFile, m.ebpf_maps, m.ebpf_progs, "test", testClassifier())
 
 	err = elfLoader.parseSection()
 	assert.NoError(t, err)
@@ -1172,7 +1565,7 @@ func TestMultiProgramOneSectionWithSubprogRejected(t *testing.T) {
 
 	elfFile, err := elf.NewFile(f)
 	assert.NoError(t, err)
-	elfLoader := newElfLoader(elfFile, m.ebpf_maps, m.ebpf_progs, "test", nil)
+	elfLoader := newElfLoader(elfFile, m.ebpf_maps, m.ebpf_progs, "test", testClassifier())
 
 	err = elfLoader.parseSection()
 	assert.NoError(t, err)
@@ -1213,7 +1606,7 @@ func TestMultiSubprogramWithDistinctSubprogsRejected(t *testing.T) {
 
 	elfFile, err := elf.NewFile(f)
 	assert.NoError(t, err)
-	elfLoader := newElfLoader(elfFile, m.ebpf_maps, m.ebpf_progs, "test", nil)
+	elfLoader := newElfLoader(elfFile, m.ebpf_maps, m.ebpf_progs, "test", testClassifier())
 
 	assert.NoError(t, elfLoader.parseSection())
 
@@ -1252,7 +1645,7 @@ func TestTextOnlyMapAssociation(t *testing.T) {
 
 	elfFile, err := elf.NewFile(f)
 	assert.NoError(t, err)
-	elfLoader := newElfLoader(elfFile, m.ebpf_maps, m.ebpf_progs, "test", nil)
+	elfLoader := newElfLoader(elfFile, m.ebpf_maps, m.ebpf_progs, "test", testClassifier())
 
 	assert.NoError(t, elfLoader.parseSection())
 	assert.NotNil(t, elfLoader.textSection)
@@ -1302,7 +1695,7 @@ func TestSubprogramNoMapRelocation(t *testing.T) {
 
 	elfFile, err := elf.NewFile(f)
 	assert.NoError(t, err)
-	elfLoader := newElfLoader(elfFile, m.ebpf_maps, m.ebpf_progs, "test", nil)
+	elfLoader := newElfLoader(elfFile, m.ebpf_maps, m.ebpf_progs, "test", testClassifier())
 
 	assert.NoError(t, elfLoader.parseSection())
 	assert.NotNil(t, elfLoader.textSection)
@@ -1359,7 +1752,7 @@ func TestSubprogramGlobalMapRelocation(t *testing.T) {
 
 	elfFile, err := elf.NewFile(f)
 	assert.NoError(t, err)
-	elfLoader := newElfLoader(elfFile, m.ebpf_maps, m.ebpf_progs, "", nil)
+	elfLoader := newElfLoader(elfFile, m.ebpf_maps, m.ebpf_progs, "", testClassifier())
 
 	assert.NoError(t, elfLoader.parseSection())
 	assert.NotNil(t, elfLoader.reloSectionMap[uint32(elfLoader.textSectionIndex)],
@@ -1459,7 +1852,7 @@ func TestSubprogramRealKernelLoad(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			client := New(Config{NamespacedMaps: testNamespacedMaps})
+			client := New(Config{NamespacedMaps: testNamespacedMaps, GlobalMaps: testGlobalMaps, GlobalPinPrefix: testGlobalPinPrefix})
 			progs, maps, err := client.LoadBpfFile(tt.elf, tt.pinPrefix)
 			// Best-effort cleanup of the pins this load created.
 			defer func() {
@@ -1506,7 +1899,7 @@ func TestSubprogramInCustomSectionRejected(t *testing.T) {
 
 	elfFile, err := elf.NewFile(f)
 	assert.NoError(t, err)
-	elfLoader := newElfLoader(elfFile, m.ebpf_maps, m.ebpf_progs, "test", nil)
+	elfLoader := newElfLoader(elfFile, m.ebpf_maps, m.ebpf_progs, "test", testClassifier())
 	assert.NoError(t, elfLoader.parseSection())
 
 	mapData, err := elfLoader.parseMap(BpfCustomData{})
