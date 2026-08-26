@@ -1,0 +1,69 @@
+#include "vmlinux.h"
+#include <bpf/bpf_helpers.h>
+#include <bpf/bpf_tracing.h>
+#include <bpf/bpf_core_read.h>
+
+#define BPF_F_NO_PREALLOC 1
+#define PIN_GLOBAL_NS           2
+
+struct bpf_map_def_pvt {
+	__u32 type;
+	__u32 key_size;
+	__u32 value_size;
+	__u32 max_entries;
+	__u32 map_flags;
+	__u32 pinning;
+	__u32 inner_map_fd;
+};
+
+struct conntrack_key {
+   __u32 src_ip;
+   __u16 src_port;
+   __u32 dest_ip;
+   __u16 dest_port;
+   __u8  protocol;
+};
+
+struct conntrack_value {
+   __u8 val[4];
+};
+
+struct bpf_map_def_pvt SEC("maps") aws_conntrack_map = {
+    .type = BPF_MAP_TYPE_LRU_HASH,
+    .key_size = sizeof(struct conntrack_key),
+    .value_size = sizeof(struct conntrack_value),
+    .max_entries = 65536,
+    .pinning = PIN_GLOBAL_NS,
+};
+
+/* Subprogram B: does the actual map lookup.
+ * This is called by subprogram A, exercising .text -> .text calls. */
+static __attribute__((noinline)) int do_lookup(__u32 src_ip)
+{
+    struct conntrack_key key = {};
+    key.src_ip = src_ip;
+
+    struct conntrack_value *val;
+    val = bpf_map_lookup_elem(&aws_conntrack_map, &key);
+    if (val)
+        return val->val[0];
+    return 0;
+}
+
+/* Subprogram A: calls subprogram B.
+ * Both are __noinline and end up in .text section. */
+static __attribute__((noinline)) int lookup_conntrack(__u32 src_ip)
+{
+    return do_lookup(src_ip);
+}
+
+SEC("tc_cls")
+int handle_ingress(struct __sk_buff *skb)
+{
+    int result = lookup_conntrack(0x0a010164);
+    if (result)
+        return BPF_OK;
+    return BPF_DROP;
+}
+
+char _license[] SEC("license") = "GPL";

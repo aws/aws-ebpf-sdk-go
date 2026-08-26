@@ -15,17 +15,18 @@
 package progs
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
-	"strings"
 	"syscall"
 	"unsafe"
 
 	constdef "github.com/aws/aws-ebpf-sdk-go/pkg/constants"
 	"github.com/aws/aws-ebpf-sdk-go/pkg/logger"
 	ebpf_maps "github.com/aws/aws-ebpf-sdk-go/pkg/maps"
+	"github.com/aws/aws-ebpf-sdk-go/pkg/metrics"
 	"github.com/aws/aws-ebpf-sdk-go/pkg/utils"
 	"github.com/vishvananda/netlink"
 	"golang.org/x/sys/unix"
@@ -40,6 +41,35 @@ type BpfProgAPIs interface {
 }
 
 var log = logger.Get()
+
+// maxProgLoadAttempts bounds how many times BPF_PROG_LOAD is retried on EAGAIN
+// (verifier interrupted by a pending signal). 5 attempts comfortably covers the
+// observed sub-1% EAGAIN rate while still surfacing a genuinely stuck load.
+const maxProgLoadAttempts = 5
+
+// loadProgWithRetry runs the BPF_PROG_LOAD syscall (provided by load) and
+// retries it on EAGAIN up to maxProgLoadAttempts times.
+//
+// The kernel BPF verifier returns EAGAIN when interrupted by a pending signal
+// mid-verify (see kernel/bpf/verifier.c: bpf_check → signal_pending → -EAGAIN).
+// A bounded retry handles transient interruptions without livelocking.
+func loadProgWithRetry(load func() (uintptr, syscall.Errno)) (uintptr, syscall.Errno) {
+	var fd uintptr
+	var errno syscall.Errno
+	for attempt := 1; ; attempt++ {
+		fd, errno = load()
+		if errno == unix.EAGAIN {
+			if attempt < maxProgLoadAttempts {
+				metrics.RecordProgLoadEAGAINRetry()
+				log.Infof("BPF_PROG_LOAD returned EAGAIN (attempt %d/%d), retrying", attempt, maxProgLoadAttempts)
+				continue
+			}
+			metrics.RecordProgLoadEAGAINExhausted()
+			log.Errorf("BPF_PROG_LOAD still EAGAIN after %d attempts, giving up - prog load failed", maxProgLoadAttempts)
+		}
+		return fd, errno
+	}
+}
 
 type CreateEBPFProgInput struct {
 	ProgType       string
@@ -117,7 +147,7 @@ type BpfProgAttr struct {
 type BpfObjGetInfo struct {
 	bpf_fd   uint32
 	info_len uint32
-	info     uintptr
+	info     unsafe.Pointer
 }
 
 /*
@@ -128,7 +158,7 @@ type BpfObjGetInfo struct {
  * };
  */
 type BpfObjGet struct {
-	pathname   uintptr
+	pathname   unsafe.Pointer
 	bpf_fd     uint32
 	file_flags uint32
 }
@@ -181,16 +211,26 @@ func (m *BpfProgram) UnPinProg(pinPath string) error {
 		return err
 	}
 	if m.ProgFD <= 0 {
-		log.Errorf("map FD is invalid or closed %d", m.ProgFD)
+		log.Debugf("prog FD is invalid or already closed %d", m.ProgFD)
 		return nil
 	}
-	return unix.Close(int(m.ProgFD))
+	// Zero ProgFD before closing so a second call to UnPinProg on the same struct
+	// is a no-op instead of closing a fd the kernel has since reassigned to an
+	// unrelated open file in the same process. See pkg/maps/loader.go UnPinMap
+	// for the equivalent fix on BpfMap.
+	fd := m.ProgFD
+	m.ProgFD = 0
+	return unix.Close(fd)
 }
 
-func parseLogs(log []byte) []string {
-	logStr := string(log)
-	logs := strings.Split(logStr, "\n")
-	return logs
+// verifierLogString returns the verifier message up to the first NUL,
+// converting only that prefix (not the whole ~16 MiB NUL-padded buffer).
+func verifierLogString(logBuf []byte) string {
+	end := bytes.IndexByte(logBuf, 0)
+	if end < 0 {
+		end = len(logBuf)
+	}
+	return string(logBuf[:end])
 }
 
 func (m *BpfProgram) LoadProg(progMetaData CreateEBPFProgInput) (int, error) {
@@ -227,18 +267,22 @@ func (m *BpfProgram) LoadProg(progMetaData CreateEBPFProgInput) (int, error) {
 	license := []byte(progMetaData.LicenseStr)
 	program.License = uintptr(unsafe.Pointer(&license[0]))
 
-	fd, _, errno := unix.Syscall(unix.SYS_BPF,
-		uintptr(constdef.BPF_PROG_LOAD),
-		uintptr(unsafe.Pointer(&program)),
-		unsafe.Sizeof(program))
-	runtime.KeepAlive(progMetaData.ProgData)
-	runtime.KeepAlive(license)
+	fd, errno := loadProgWithRetry(func() (uintptr, syscall.Errno) {
+		r, _, e := unix.Syscall(unix.SYS_BPF,
+			uintptr(constdef.BPF_PROG_LOAD),
+			uintptr(unsafe.Pointer(&program)),
+			unsafe.Sizeof(program))
+		runtime.KeepAlive(progMetaData.ProgData)
+		runtime.KeepAlive(license)
+		runtime.KeepAlive(logBuf)
+		return r, e
+	})
 
-	log.Infof("Load prog done with fd : %d", int(fd))
+	log.Infof("Load prog done with fd : %d errno: %d (%s) insnCnt: %d attrSize: %d progType: %d", int(fd), int(errno), errno.Error(), program.InsnCnt, unsafe.Sizeof(program), program.ProgType)
 	if errno != 0 {
-		logArray := parseLogs(logBuf)
-		for _, str := range logArray {
-			fmt.Println(str)
+		// Surface the verifier log captured during the load above for diagnostics.
+		if verifierLog := verifierLogString(logBuf); len(verifierLog) > 0 {
+			log.Infof("Verifier log: %s", verifierLog)
 		}
 		return -1, errno
 	}
@@ -301,7 +345,7 @@ func GetBPFprogInfo(progFD int) (BpfProgInfo, error) {
 	objInfo := BpfObjGetInfo{
 		bpf_fd:   uint32(progFD),
 		info_len: uint32(unsafe.Sizeof(bpfProgInfo)),
-		info:     uintptr(unsafe.Pointer(&bpfProgInfo)),
+		info:     unsafe.Pointer(&bpfProgInfo),
 	}
 
 	err := objInfo.BpfGetProgramInfoForFD()
@@ -319,6 +363,9 @@ func GetBPFprogInfo(progFD int) (BpfProgInfo, error) {
 
 func (m *BpfProgram) GetBPFProgAssociatedMapsIDs(progFD int) ([]uint32, error) {
 	bpfProgInfo, err := GetBPFprogInfo(progFD)
+	if err != nil {
+		return nil, fmt.Errorf("GetBPFprogInfo failed for fd %d: %w", progFD, err)
+	}
 
 	if bpfProgInfo.NrMapIDs <= 0 {
 		return nil, nil
@@ -333,7 +380,7 @@ func (m *BpfProgram) GetBPFProgAssociatedMapsIDs(progFD int) ([]uint32, error) {
 	objInfo := BpfObjGetInfo{
 		bpf_fd:   uint32(progFD),
 		info_len: uint32(unsafe.Sizeof(newBpfProgInfo)),
-		info:     uintptr(unsafe.Pointer(&newBpfProgInfo)),
+		info:     unsafe.Pointer(&newBpfProgInfo),
 	}
 
 	err = objInfo.BpfGetProgramInfoForFD()
@@ -354,7 +401,7 @@ func BpfGetMapInfoFromProgInfo(progFD int, numMaps uint32) ([]ebpf_maps.BpfMapIn
 	objInfo := BpfObjGetInfo{
 		bpf_fd:   uint32(progFD),
 		info_len: uint32(unsafe.Sizeof(newBpfProgInfo)),
-		info:     uintptr(unsafe.Pointer(&newBpfProgInfo)),
+		info:     unsafe.Pointer(&newBpfProgInfo),
 	}
 
 	err := objInfo.BpfGetProgramInfoForFD()
@@ -442,7 +489,7 @@ func (m *BpfProgram) GetProgFromPinPath(pinPath string) (BpfProgInfo, int, error
 
 	cPath := []byte(pinPath + "\x00")
 	objInfo := BpfObjGet{
-		pathname: uintptr(unsafe.Pointer(&cPath[0])),
+		pathname: unsafe.Pointer(&cPath[0]),
 	}
 
 	progFD, err := objInfo.BpfGetObject()
