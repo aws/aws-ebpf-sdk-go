@@ -253,18 +253,23 @@ func (m *BpfProgram) LoadProg(progMetaData CreateEBPFProgInput) (int, error) {
 		prog_type = uint32(netlink.BPF_PROG_TYPE_UNSPEC)
 	}
 
+	// netlink.BPFAttr is declared in a third-party package with uintptr fields, so
+	// the addresses below cannot be held in an unsafe.Pointer. The referenced
+	// objects are kept alive across the syscall with runtime.KeepAlive instead.
 	logBuf := make([]byte, utils.GetLogBufferSize())
 	program := netlink.BPFAttr{
 		ProgType: prog_type,
-		LogBuf:   uintptr(unsafe.Pointer(&logBuf[0])),
+		LogBuf:   uintptr(unsafe.Pointer(&logBuf[0])), //ptrcheck:ignore third-party field type, see comment above
 		LogSize:  uint32(cap(logBuf) - 1),
 		LogLevel: 1,
 	}
 
+	//ptrcheck:ignore third-party field type, see comment above
 	program.Insns = uintptr(unsafe.Pointer(&progMetaData.ProgData[0]))
 	program.InsnCnt = uint32(len(progMetaData.ProgData) / progMetaData.InsDefSize)
 
 	license := []byte(progMetaData.LicenseStr)
+	//ptrcheck:ignore third-party field type, see comment above
 	program.License = uintptr(unsafe.Pointer(&license[0]))
 
 	fd, errno := loadProgWithRetry(func() (uintptr, syscall.Errno) {
