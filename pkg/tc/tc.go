@@ -308,7 +308,7 @@ func (m *bpfTc) getAttachedProgId(link netlink.Link, filterParent uint32) int {
 	linkName := link.Attrs().Name
 	filters, err := netlink.FilterList(link, filterParent)
 	if err != nil {
-		log.Errorf("failed to list filters for: %s ", linkName, err)
+		log.Errorf("failed to list filters for: %s err: %v", linkName, err)
 	}
 	progId := 0
 	filterHandle := uint32(constdef.DEFAULT_BPF_FILTER_HANDLE)

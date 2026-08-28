@@ -549,7 +549,7 @@ func GetBPFmapInfo(mapFD int) (BpfMapInfo, error) {
 
 	err := objInfo.BpfGetMapInfoForFD()
 	if err != nil {
-		log.Errorf("failed to get map Info for FD - ", mapFD)
+		log.Errorf("failed to get map Info for FD - %d", mapFD)
 		return BpfMapInfo{}, err
 	}
 
@@ -571,7 +571,7 @@ func BpfGetAllMapInfo() ([]BpfMapInfo, error) {
 		log.Infof("Found map FD - %d", mapfd)
 		bpfMapInfo, err := GetBPFmapInfo(mapfd)
 		if err != nil {
-			log.Errorf("failed to get map Info for FD", mapfd)
+			log.Errorf("failed to get map Info for FD - %d", mapfd)
 			unix.Close(mapfd)
 			return nil, err
 		}
