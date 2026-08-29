@@ -11,6 +11,8 @@ import (
 	"unsafe"
 
 	goelf "github.com/aws/aws-ebpf-sdk-go/pkg/elfparser"
+	ebpf_maps "github.com/aws/aws-ebpf-sdk-go/pkg/maps"
+	ebpf_progs "github.com/aws/aws-ebpf-sdk-go/pkg/progs"
 	ebpf_tc "github.com/aws/aws-ebpf-sdk-go/pkg/tc"
 	"github.com/fatih/color"
 )
@@ -64,6 +66,7 @@ func main() {
 		{Name: "Test updating Map size", Func: TestLoadMapWithCustomSize},
 		{Name: "Test bulk Map operations", Func: TestBulkMapOperations},
 		{Name: "Test bulk refresh Map operations", Func: TestBulkRefreshMapOperations},
+		{Name: "Test tail call prog array", Func: TestTailCallProgArray},
 	}
 
 	testSummary := make(map[string]string)
@@ -482,5 +485,187 @@ func TestBulkRefreshMapOperations() error {
 	}
 	fmt.Println("Updated 32K entries successfully")
 
+	return nil
+}
+
+func TestTailCallProgArray() error {
+	// Step 1: Load the tailcall BPF program which contains a BPF_MAP_TYPE_PROG_ARRAY
+	gosdkClient := goelf.New(goelf.Config{})
+	progInfo, loadedMaps, err := gosdkClient.LoadBpfFile("c/tc.tailcall.bpf.elf", "tailcall")
+	if err != nil {
+		fmt.Println("Load tailcall BPF failed", "err:", err)
+		return err
+	}
+
+	fmt.Println("Loaded tailcall programs:")
+	for pinPath, _ := range progInfo {
+		fmt.Println("  Prog Pin Path: ", pinPath)
+	}
+	fmt.Println("Loaded tailcall maps:")
+	for mapName, _ := range loadedMaps {
+		fmt.Println("  Map Name: ", mapName)
+	}
+
+	// Step 2: Verify we got the prog array map
+	progArrayMap, ok := loadedMaps["tailcall_map"]
+	if !ok {
+		return fmt.Errorf("tailcall_map not found in loaded maps")
+	}
+	fmt.Println("Found tailcall_map with FD:", progArrayMap.MapFD)
+
+	// Step 3: Load the tail call target programs
+	targetProgInfo, _, err := gosdkClient.LoadBpfFile("c/tc.tailcall_target.bpf.elf", "target")
+	if err != nil {
+		fmt.Println("Load tailcall target BPF failed", "err:", err)
+		return err
+	}
+
+	fmt.Println("Loaded target programs:")
+	for pinPath, _ := range targetProgInfo {
+		fmt.Println("  Target Prog Pin Path: ", pinPath)
+	}
+
+	// Step 4: Get program FDs for the targets
+	dropFD, passFD := -1, -1
+	for pinPath, data := range targetProgInfo {
+		switch {
+		case strings.Contains(pinPath, "tailcall_target_drop"):
+			dropFD = data.Program.ProgFD
+			fmt.Println("  Drop target FD:", dropFD)
+		case strings.Contains(pinPath, "tailcall_target_pass"):
+			passFD = data.Program.ProgFD
+			fmt.Println("  Pass target FD:", passFD)
+		}
+	}
+
+	if dropFD < 0 || passFD < 0 {
+		return fmt.Errorf("failed to find target program FDs: dropFD=%d passFD=%d", dropFD, passFD)
+	}
+
+	// Step 5: Test UpdateProgArrayEntry - insert tail call targets into prog array
+	fmt.Println("Inserting drop program into slot 0...")
+	err = progArrayMap.UpdateProgArrayEntry(0, dropFD)
+	if err != nil {
+		fmt.Println("UpdateProgArrayEntry slot 0 failed:", err)
+		return err
+	}
+
+	fmt.Println("Inserting pass program into slot 1...")
+	err = progArrayMap.UpdateProgArrayEntry(1, passFD)
+	if err != nil {
+		fmt.Println("UpdateProgArrayEntry slot 1 failed:", err)
+		return err
+	}
+
+	// Step 6: Verify the prog array entries by reading them back
+	// Prog array lookup returns program IDs (not FDs)
+	dropProgInfo, err := ebpf_progs.GetBPFprogInfo(dropFD)
+	if err != nil {
+		fmt.Println("GetBPFprogInfo for drop failed:", err)
+		return err
+	}
+	passProgInfo, err := ebpf_progs.GetBPFprogInfo(passFD)
+	if err != nil {
+		fmt.Println("GetBPFprogInfo for pass failed:", err)
+		return err
+	}
+
+	key0 := uint32(0)
+	val0 := uint32(0)
+	err = progArrayMap.GetMapEntry(uintptr(unsafe.Pointer(&key0)), uintptr(unsafe.Pointer(&val0)))
+	if err != nil {
+		fmt.Println("GetMapEntry for slot 0 failed:", err)
+		return err
+	}
+	if val0 != dropProgInfo.ID {
+		return fmt.Errorf("slot 0: expected prog ID %d, got %d", dropProgInfo.ID, val0)
+	}
+	fmt.Printf("Slot 0 verified: prog ID %d matches drop program\n", val0)
+
+	key1 := uint32(1)
+	val1 := uint32(0)
+	err = progArrayMap.GetMapEntry(uintptr(unsafe.Pointer(&key1)), uintptr(unsafe.Pointer(&val1)))
+	if err != nil {
+		fmt.Println("GetMapEntry for slot 1 failed:", err)
+		return err
+	}
+	if val1 != passProgInfo.ID {
+		return fmt.Errorf("slot 1: expected prog ID %d, got %d", passProgInfo.ID, val1)
+	}
+	fmt.Printf("Slot 1 verified: prog ID %d matches pass program\n", val1)
+
+	// Step 7: Test UpdateProgArrayEntry - overwrite slot 0 with pass program
+	fmt.Println("Overwriting slot 0 with pass program...")
+	err = progArrayMap.UpdateProgArrayEntry(0, passFD)
+	if err != nil {
+		fmt.Println("UpdateProgArrayEntry overwrite slot 0 failed:", err)
+		return err
+	}
+
+	val0 = uint32(0)
+	err = progArrayMap.GetMapEntry(uintptr(unsafe.Pointer(&key0)), uintptr(unsafe.Pointer(&val0)))
+	if err != nil {
+		fmt.Println("GetMapEntry for overwritten slot 0 failed:", err)
+		return err
+	}
+	if val0 != passProgInfo.ID {
+		return fmt.Errorf("overwritten slot 0: expected prog ID %d, got %d", passProgInfo.ID, val0)
+	}
+	fmt.Printf("Slot 0 overwrite verified: prog ID %d matches pass program\n", val0)
+
+	// Step 8: Test DeleteProgArrayEntry - clear slot 1
+	fmt.Println("Deleting slot 1...")
+	err = progArrayMap.DeleteProgArrayEntry(1)
+	if err != nil {
+		fmt.Println("DeleteProgArrayEntry slot 1 failed:", err)
+		return err
+	}
+
+	// After deletion, lookup should fail
+	val1 = uint32(0)
+	err = progArrayMap.GetMapEntry(uintptr(unsafe.Pointer(&key1)), uintptr(unsafe.Pointer(&val1)))
+	if err == nil {
+		return fmt.Errorf("slot 1 should be empty after delete, but got prog ID %d", val1)
+	}
+	fmt.Println("Slot 1 deletion verified: lookup correctly returns error")
+
+	// Step 9: Test error cases
+	// Test with wrong map type
+	fmt.Println("Testing error case: wrong map type...")
+	wrongMap := ebpf_maps.BpfMap{MapMetaData: ebpf_maps.CreateEBPFMapInput{
+		Name: "not_prog_array",
+		Type: 1, // BPF_MAP_TYPE_HASH
+	}}
+	err = wrongMap.UpdateProgArrayEntry(0, dropFD)
+	if err == nil {
+		return fmt.Errorf("expected error when using UpdateProgArrayEntry on non-prog-array map")
+	}
+	fmt.Println("  Correctly rejected wrong map type:", err)
+
+	// Test with negative FD
+	fmt.Println("Testing error case: negative FD...")
+	err = progArrayMap.UpdateProgArrayEntry(0, -1)
+	if err == nil {
+		return fmt.Errorf("expected error when using negative FD")
+	}
+	fmt.Println("  Correctly rejected negative FD:", err)
+
+	// Step 10: Test DeleteProgArrayEntry with wrong map type
+	fmt.Println("Testing error case: DeleteProgArrayEntry on wrong map type...")
+	err = wrongMap.DeleteProgArrayEntry(0)
+	if err == nil {
+		return fmt.Errorf("expected error when using DeleteProgArrayEntry on non-prog-array map")
+	}
+	fmt.Println("  Correctly rejected wrong map type for delete:", err)
+
+	// Step 11: Clean up - delete remaining slot
+	fmt.Println("Cleaning up: deleting slot 0...")
+	err = progArrayMap.DeleteProgArrayEntry(0)
+	if err != nil {
+		fmt.Println("DeleteProgArrayEntry cleanup slot 0 failed:", err)
+		return err
+	}
+
+	fmt.Println("Tail call prog array test PASSED!")
 	return nil
 }

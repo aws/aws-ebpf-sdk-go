@@ -347,6 +347,55 @@ func (m *BpfMap) DeleteMapEntry(key uintptr) error {
 	return nil
 }
 
+// isProgArray checks that this map is a BPF_MAP_TYPE_PROG_ARRAY, since tail
+// call helpers below only make sense for that map type.
+func (m *BpfMap) isProgArray() error {
+	if constdef.EBPFMapType(m.MapMetaData.Type) != constdef.BPF_MAP_TYPE_PROG_ARRAY {
+		return fmt.Errorf("map %q is type %d, not BPF_MAP_TYPE_PROG_ARRAY", m.MapMetaData.Name, m.MapMetaData.Type)
+	}
+	return nil
+}
+
+// UpdateProgArrayEntry sets tail-call slot `index` of a BPF_MAP_TYPE_PROG_ARRAY
+// map to `progFD`, so a bpf_tail_call(ctx, &map, index) in another program
+// jumps into it. Key and value are heap-allocated so their addresses remain
+// stable across potential stack growth when entering CreateUpdateMapEntry.
+func (m *BpfMap) UpdateProgArrayEntry(index uint32, progFD int) error {
+	if err := m.isProgArray(); err != nil {
+		return fmt.Errorf("UpdateProgArrayEntry: %w", err)
+	}
+	if progFD < 0 {
+		return fmt.Errorf("UpdateProgArrayEntry: invalid program FD %d", progFD)
+	}
+
+	key := new(uint32)
+	*key = index
+	value := new(uint32)
+	*value = uint32(progFD)
+	err := m.CreateUpdateMapEntry(uintptr(unsafe.Pointer(key)), uintptr(unsafe.Pointer(value)), uint64(constdef.BPF_ANY))
+	runtime.KeepAlive(key)
+	runtime.KeepAlive(value)
+	return err
+}
+
+// DeleteProgArrayEntry clears tail-call slot `index`. A bpf_tail_call() to
+// that index afterwards just falls through, same as a normal cache miss.
+// Key is heap-allocated so its address remains stable across stack growth.
+func (m *BpfMap) DeleteProgArrayEntry(index uint32) error {
+	if err := m.isProgArray(); err != nil {
+		return fmt.Errorf("DeleteProgArrayEntry: %w", err)
+	}
+
+	key := new(uint32)
+	*key = index
+	err := m.DeleteMapEntry(uintptr(unsafe.Pointer(key)))
+	runtime.KeepAlive(key)
+	if err != nil {
+		return fmt.Errorf("DeleteProgArrayEntry index %d: %w", *key, err)
+	}
+	return nil
+}
+
 // To get the first entry pass key as `nil`
 func (m *BpfMap) GetFirstMapEntry(nextKey uintptr) error {
 	return m.GetNextMapEntry(uintptr(unsafe.Pointer(nil)), nextKey)

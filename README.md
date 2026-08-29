@@ -53,7 +53,8 @@ goebpfelfparser "github.com/aws/aws-ebpf-sdk-go/pkg/elfparser"
 3. Load the elf -
 
 ```
-goebpfelfparser.LoadBpfFile(<ELF file>, <custom pin path>)
+sdkClient := goebpfelfparser.New(goebpfelfparser.Config{})
+sdkClient.LoadBpfFile(<ELF file>, <custom pin path>)
 ```
 
 On a successful load, SDK returns -
@@ -101,6 +102,77 @@ struct bpf_map_def_pvt {
 	__u32 inner_map_fd;
 };
 ```
+
+## How to use tail calls (BPF_MAP_TYPE_PROG_ARRAY)?
+
+A `BPF_MAP_TYPE_PROG_ARRAY` map (declared like any other map above) and a
+`bpf_tail_call()` call in your BPF C source need no special ELF-loader
+handling from the SDK: `bpf_tail_call()` is an ordinary helper call, and the
+prog array map FD is applied through the same relocation path as any other
+map reference. What the ELF loader cannot do for you is populate the map,
+since that requires the FDs of the *target* programs, which only exist after
+they've been loaded.
+
+### Example: wiring an EDT rate-limiter as a tail-call target
+
+Suppose you have a policy program (`tc.v4egress.bpf.c`) that tail-calls into
+an EDT program (`edt.v4egress.bpf.c`) at index 1. Both ELFs declare the same
+`tc_jump_table` prog array with `PIN_GLOBAL_NS`, so the kernel shares a
+single map instance across loads.
+
+1. Load the caller ELF (the program that issues `bpf_tail_call`). This
+   creates the prog array map and loads the caller program:
+
+```go
+sdkClient := goebpfelfparser.New(goebpfelfparser.Config{})
+callerProgs, maps, err := sdkClient.LoadBpfFile("tc.v4egress.bpf.elf", "egress")
+```
+
+2. Load the tail-call target from its own ELF. Because the prog array map
+   uses `PIN_GLOBAL_NS`, both ELFs share the same kernel map instance via
+   pinning — there is no need to pass the map FD across loads manually:
+
+```go
+targetProgs, _, err := sdkClient.LoadBpfFile("edt.v4egress.bpf.elf", "edt")
+```
+
+3. Look up the prog array map by name from the caller's maps, find the
+   target program's FD from the second load, and populate the tail-call slot.
+
+   `LoadBpfFile` returns programs keyed by their **full pin path**
+   (e.g. `/sys/fs/bpf/globals/aws/programs/edt_handle_edt_egress`), so you
+   need to iterate and match the C function name:
+
+```go
+progArray := maps["tc_jump_table"]
+for pinPath, data := range targetProgs {
+    if strings.Contains(pinPath, "handle_edt_egress") {
+        err = progArray.UpdateProgArrayEntry(1 /* TC_TAIL_CALL_EDT_EGRESS */, data.Program.ProgFD)
+        break
+    }
+}
+```
+
+### API reference
+
+`UpdateProgArrayEntry` rejects maps that aren't `BPF_MAP_TYPE_PROG_ARRAY` and
+negative FDs up front, rather than surfacing an opaque `EINVAL` from the
+kernel. To remove a slot (so a tail call to that index falls through instead
+of jumping), use `progArray.DeleteProgArrayEntry(index)`.
+
+### Future improvements
+
+The current API requires callers to iterate the returned program map and
+match pin paths by substring to find a target program. Two planned
+improvements would reduce this boilerplate:
+
+- **`FindProgByFunc(progs map[string]BpfData, funcName string) (BpfData, bool)`** —
+  a lookup helper that finds a loaded program by its C function name, removing
+  the need for manual iteration and `strings.Contains` matching.
+
+- **`LoadAndWireTailCall(targetELF, pinPrefix, funcName string, progArray BpfMap, index uint32)`** —
+  a single-call method that loads a target ELF and inserts the named program
+  into a prog array slot, collapsing steps 2–3 above into one operation.
 
 ## How to debug SDK issues?
 

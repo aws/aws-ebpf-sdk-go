@@ -133,6 +133,7 @@ func (mr *MockBpfMapAPIsMockRecorder) DeleteMapEntry(arg0 interface{}) *gomock.C
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteMapEntry", reflect.TypeOf((*MockBpfMapAPIs)(nil).DeleteMapEntry), arg0)
 }
 
+
 // GetBPFmapInfo mocks base method.
 func (m *MockBpfMapAPIs) GetBPFmapInfo(arg0 uint32) (maps.BpfMapInfo, error) {
 	m.ctrl.T.Helper()
@@ -246,3 +247,4 @@ func (mr *MockBpfMapAPIsMockRecorder) UpdateMapEntry(arg0, arg1 interface{}) *go
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateMapEntry", reflect.TypeOf((*MockBpfMapAPIs)(nil).UpdateMapEntry), arg0, arg1)
 }
+
