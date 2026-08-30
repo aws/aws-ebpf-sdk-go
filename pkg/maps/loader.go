@@ -611,17 +611,13 @@ func (m *BpfMap) GetMapFromPinPath(pinPath string) (BpfMapInfo, error) {
 	if err != nil {
 		log.Errorf("failed to get object")
 		return BpfMapInfo{}, err
-
 	}
+	defer unix.Close(mapFD)
 
 	bpfMapInfo, err := GetBPFmapInfo(mapFD)
 	if err != nil {
 		log.Errorf("failed to get map Info for FD - %d", mapFD)
 		return bpfMapInfo, err
-	}
-	err = unix.Close(int(mapFD))
-	if err != nil {
-		log.Infof("Failed to close but return the mapinfo")
 	}
 
 	return bpfMapInfo, nil
