@@ -769,6 +769,272 @@ func TestRecoverAllBpfProgramsAndMapsReturnsPartialResults(t *testing.T) {
 	}
 }
 
+// TestRecoverAllBpfProgramsAndMapsRecoversAllWorkloads exercises the all-success
+// path: when every pin on the node is valid and parseable, recovery must return
+// each workload's program together with all of its maps and a nil error. The
+// existing partial-recovery tests only cover the failure branches, so this
+// guards against the continue-and-aggregate logic spuriously reporting partial
+// recovery (or dropping a workload) when nothing actually failed.
+func TestRecoverAllBpfProgramsAndMapsRecoversAllWorkloads(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("requires root to load and recover BPF objects")
+	}
+	if !assert.NoError(t, utils.Mount_bpf_fs()) {
+		return
+	}
+	defer func() {
+		assert.NoError(t, utils.Unmount_bpf_fs())
+	}()
+
+	clearTestGlobalMapCache()
+	defer clearTestGlobalMapCache()
+
+	client := New(Config{
+		NamespacedMaps:  testNamespacedMaps,
+		GlobalMaps:      testGlobalMaps,
+		GlobalPinPrefix: testGlobalPinPrefix,
+	})
+
+	// Two distinct workloads pinned with the "<podName>@<namespace>" identifier
+	// the agent uses. One pod name contains a dot converted to an underscore,
+	// which is the exact regression this PR fixes: the parser must still key the
+	// maps and programs under the correct identifier so both workloads recover.
+	firstPrograms, firstMaps, err := client.LoadBpfFile(
+		"../../test-data/recoverydata.bpf.elf",
+		"app_a@default",
+	)
+	if !assert.NoError(t, err) {
+		return
+	}
+	closeBpfDataFDs(t, firstPrograms, firstMaps)
+
+	secondPrograms, secondMaps, err := client.LoadBpfFile(
+		"../../test-data/recoverydata.bpf.elf",
+		"app-b@kube-system",
+	)
+	if !assert.NoError(t, err) {
+		return
+	}
+	closeBpfDataFDs(t, secondPrograms, secondMaps)
+
+	recovered, err := client.RecoverAllBpfProgramsAndMaps()
+	defer closeBpfDataFDs(t, recovered, nil)
+
+	// Everything was valid, so recovery must succeed cleanly - no partial error.
+	assert.NoError(t, err)
+	assert.Equal(t, len(firstPrograms)+len(secondPrograms), len(recovered))
+
+	for _, loaded := range []map[string]BpfData{firstPrograms, secondPrograms} {
+		for pinPath, expected := range loaded {
+			actual, ok := recovered[pinPath]
+			if !assert.True(t, ok, "program %s should be recovered", pinPath) {
+				continue
+			}
+			// A fresh FD must be handed back for every recovered program...
+			assert.NotZero(t, actual.Program.ProgFD)
+			// ...and every associated map, keyed by the same name, with a live FD.
+			assert.Equal(t, len(expected.Maps), len(actual.Maps))
+			for mapName := range expected.Maps {
+				recoveredMap, ok := actual.Maps[mapName]
+				if assert.True(t, ok, "map %s for program %s should be recovered", mapName, pinPath) {
+					assert.NotZero(t, recoveredMap.MapFD)
+				}
+			}
+		}
+	}
+}
+
+// TestRecoverAllBpfProgramsAndMapsWrapsErrPartialRecovery asserts the partial
+// failure is reported through the exported ErrPartialRecovery sentinel so
+// callers can distinguish "recovered some, skipped some" from a total failure
+// with errors.Is rather than by matching on the error string.
+func TestRecoverAllBpfProgramsAndMapsWrapsErrPartialRecovery(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("requires root to load and recover BPF objects")
+	}
+	if !assert.NoError(t, utils.Mount_bpf_fs()) {
+		return
+	}
+	defer func() {
+		assert.NoError(t, utils.Unmount_bpf_fs())
+	}()
+
+	clearTestGlobalMapCache()
+	defer clearTestGlobalMapCache()
+
+	client := New(Config{
+		NamespacedMaps:  testNamespacedMaps,
+		GlobalMaps:      testGlobalMaps,
+		GlobalPinPrefix: testGlobalPinPrefix,
+	})
+
+	// A legacy "-"-format pin is unparseable by the "@"-anchored parser, so
+	// recovery skips it and records a partial-recovery error while still
+	// recovering the valid workload below.
+	legacyPrograms, legacyMaps, err := client.LoadBpfFile(
+		"../../test-data/recoverydata.bpf.elf",
+		"legacy-format",
+	)
+	if !assert.NoError(t, err) {
+		return
+	}
+	closeBpfDataFDs(t, legacyPrograms, legacyMaps)
+
+	validPrograms, validMaps, err := client.LoadBpfFile(
+		"../../test-data/recoverydata.bpf.elf",
+		"valid@default",
+	)
+	if !assert.NoError(t, err) {
+		return
+	}
+	closeBpfDataFDs(t, validPrograms, validMaps)
+
+	recovered, err := client.RecoverAllBpfProgramsAndMaps()
+	defer closeBpfDataFDs(t, recovered, nil)
+
+	// The valid workload is still returned alongside the error...
+	assert.Equal(t, len(validPrograms), len(recovered))
+	// ...and the error is the exported sentinel, matchable with errors.Is.
+	if assert.Error(t, err) {
+		assert.True(t, errors.Is(err, ErrPartialRecovery),
+			"partial recovery must wrap ErrPartialRecovery, got %v", err)
+	}
+}
+
+// TestRecoverAllBpfProgramsAndMapsSkipsUnparseableProgPin covers the program-walk
+// analog of the map-walk legacy-skip: a program pinned with the unsupported
+// legacy "-" identifier has no "@", so GetProgIdentifierFromBPFPinPath returns an
+// empty namespace and the pin must be skipped (recorded as partial recovery)
+// rather than registered under a truncated identifier. The existing tests only
+// exercise the map-side legacy skip and the missing-map drop, not a program pin
+// the parser cannot classify.
+func TestRecoverAllBpfProgramsAndMapsSkipsUnparseableProgPin(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("requires root to load and recover BPF objects")
+	}
+	if !assert.NoError(t, utils.Mount_bpf_fs()) {
+		return
+	}
+	defer func() {
+		assert.NoError(t, utils.Unmount_bpf_fs())
+	}()
+
+	clearTestGlobalMapCache()
+	defer clearTestGlobalMapCache()
+
+	client := New(Config{
+		NamespacedMaps:  testNamespacedMaps,
+		GlobalMaps:      testGlobalMaps,
+		GlobalPinPrefix: testGlobalPinPrefix,
+	})
+
+	// "legacy-format" has no "@", so every program pinned from it
+	// ("legacy-format_handle_ingress", etc.) is unparseable to the "@"-anchored
+	// prog parser and must be skipped.
+	legacyPrograms, legacyMaps, err := client.LoadBpfFile(
+		"../../test-data/recoverydata.bpf.elf",
+		"legacy-format",
+	)
+	if !assert.NoError(t, err) {
+		return
+	}
+	closeBpfDataFDs(t, legacyPrograms, legacyMaps)
+
+	recovered, err := client.RecoverAllBpfProgramsAndMaps()
+	defer closeBpfDataFDs(t, recovered, nil)
+
+	if assert.Error(t, err) {
+		assert.True(t, errors.Is(err, ErrPartialRecovery),
+			"skipped prog pins must surface as ErrPartialRecovery, got %v", err)
+		assert.Contains(t, err.Error(), "unrecognized pin format")
+	}
+	// None of the unparseable program pins may be recovered.
+	for pinPath := range legacyPrograms {
+		assert.NotContains(t, recovered, pinPath)
+	}
+}
+
+// TestRecoverAllBpfProgramsAndMapsDoesNotLeakFDs verifies the deferred FD
+// reconciliation: map FDs opened during the map walk that are not carried out in
+// a returned program (because that program was dropped) must be closed before
+// the function returns. FD leaks in this path were raised repeatedly in review,
+// so this asserts the process-wide open-FD count does not grow across a recovery
+// that drops a workload.
+func TestRecoverAllBpfProgramsAndMapsDoesNotLeakFDs(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("requires root to load and recover BPF objects")
+	}
+	if !assert.NoError(t, utils.Mount_bpf_fs()) {
+		return
+	}
+	defer func() {
+		assert.NoError(t, utils.Unmount_bpf_fs())
+	}()
+
+	clearTestGlobalMapCache()
+	defer clearTestGlobalMapCache()
+
+	client := New(Config{
+		NamespacedMaps:  testNamespacedMaps,
+		GlobalMaps:      testGlobalMaps,
+		GlobalPinPrefix: testGlobalPinPrefix,
+	})
+
+	loadedPrograms, loadedMaps, err := client.LoadBpfFile(
+		"../../test-data/recoverydata.bpf.elf",
+		"leaktest@default",
+	)
+	if !assert.NoError(t, err) {
+		return
+	}
+
+	// Remove the map pin so recovery opens a fresh FD for the map during the map
+	// walk, then drops the program that references it during the prog walk. The
+	// only handle to that map FD is the one recovery opened, so the deferred
+	// cleanup is the sole thing that can close it.
+	missingMapPin := constdef.MAP_BPF_FS + "leaktest@default_ingress_map"
+	if !assert.NoError(t, os.Remove(missingMapPin)) {
+		closeBpfDataFDs(t, loadedPrograms, loadedMaps)
+		return
+	}
+	closeBpfDataFDs(t, loadedPrograms, loadedMaps)
+
+	before := openFDCount(t)
+
+	recovered, err := client.RecoverAllBpfProgramsAndMaps()
+	defer closeBpfDataFDs(t, recovered, nil)
+	assert.Error(t, err) // partial: the program referencing the removed map is dropped
+
+	after := openFDCount(t)
+
+	// Account only for FDs the caller now owns (returned programs + their maps).
+	// Any growth beyond those is a leaked handle the deferred cleanup missed.
+	owned := 0
+	for _, data := range recovered {
+		if data.Program.ProgFD > 0 {
+			owned++
+		}
+		for _, m := range data.Maps {
+			if m.MapFD > 0 {
+				owned++
+			}
+		}
+	}
+	assert.LessOrEqual(t, after, before+owned,
+		"recovery leaked FDs: before=%d after=%d owned-by-result=%d", before, after, owned)
+}
+
+// openFDCount returns the number of file descriptors currently open by this
+// process by counting entries in /proc/self/fd.
+func openFDCount(t *testing.T) int {
+	t.Helper()
+	entries, err := os.ReadDir("/proc/self/fd")
+	if !assert.NoError(t, err) {
+		return 0
+	}
+	return len(entries)
+}
+
 func TestRecoverAllBpfProgramsAndMapsDropsProgramWithMissingMap(t *testing.T) {
 	if os.Geteuid() != 0 {
 		t.Skip("requires root to load and recover BPF objects")
