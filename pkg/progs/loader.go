@@ -503,6 +503,10 @@ func (m *BpfProgram) GetProgFromPinPath(pinPath string) (BpfProgInfo, int, error
 	bpfProgInfo, err := GetBPFprogInfo(progFD)
 	if err != nil {
 		log.Errorf("failed to get program Info for FD - %d", progFD)
+		// We return -1 rather than progFD, so the caller has no handle to close.
+		// Close it here or the descriptor is unreachable for the life of the
+		// process. The pin keeps the program alive in the kernel.
+		unix.Close(progFD)
 		return bpfProgInfo, -1, err
 	}
 

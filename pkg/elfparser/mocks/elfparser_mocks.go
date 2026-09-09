@@ -18,6 +18,12 @@ type MockBpfSDKClient struct {
 	recorder *MockBpfSDKClientMockRecorder
 }
 
+// Compile-time assertion that MockBpfSDKClient implements the full
+// elfparser.BpfSDKClient interface. If a method is added to the interface but
+// the checked-in mock is not regenerated, this will fail to build rather than
+// letting the drift go unnoticed.
+var _ elfparser.BpfSDKClient = (*MockBpfSDKClient)(nil)
+
 // MockBpfSDKClientMockRecorder is the mock recorder for MockBpfSDKClient.
 type MockBpfSDKClientMockRecorder struct {
 	mock *MockBpfSDKClient
@@ -48,6 +54,22 @@ func (m *MockBpfSDKClient) GetAllBpfProgramsAndMaps() (map[string]elfparser.BpfD
 func (mr *MockBpfSDKClientMockRecorder) GetAllBpfProgramsAndMaps() *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetAllBpfProgramsAndMaps", reflect.TypeOf((*MockBpfSDKClient)(nil).GetAllBpfProgramsAndMaps))
+}
+
+// GetProgIdentifierFromBPFPinPath mocks base method.
+func (m *MockBpfSDKClient) GetProgIdentifierFromBPFPinPath(arg0 string) (string, string, bool) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetProgIdentifierFromBPFPinPath", arg0)
+	ret0, _ := ret[0].(string)
+	ret1, _ := ret[1].(string)
+	ret2, _ := ret[2].(bool)
+	return ret0, ret1, ret2
+}
+
+// GetProgIdentifierFromBPFPinPath indicates an expected call of GetProgIdentifierFromBPFPinPath.
+func (mr *MockBpfSDKClientMockRecorder) GetProgIdentifierFromBPFPinPath(arg0 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetProgIdentifierFromBPFPinPath", reflect.TypeOf((*MockBpfSDKClient)(nil).GetProgIdentifierFromBPFPinPath), arg0)
 }
 
 // IncreaseRlimit mocks base method.

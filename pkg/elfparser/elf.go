@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"debug/elf"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -47,10 +48,23 @@ var (
 var log = logger.Get()
 var sdkCache = cache.Get()
 
-// Config carries SDK construction options. NamespacedMaps lists BPF map names
-// that should be treated as per-namespace (per-pod-identifier) rather than global
+// ErrPartialRecovery is returned by RecoverAllBpfProgramsAndMaps (and
+// GetAllBpfProgramsAndMaps) when some pins could not be rebuilt but others
+// were
+var ErrPartialRecovery = errors.New("partial recovery")
+
+// Config carries SDK construction options.
 type Config struct {
+	// NamespacedMaps lists BPF map names that are pinned per pod-identifier
+	// rather than globally.
 	NamespacedMaps []string
+	// GlobalMaps lists BPF map names that are pinned once per node, e.g.
+	// "aws_conntrack_map" for the pin "global_aws_conntrack_map".
+	GlobalMaps []string
+	// GlobalPinPrefix is the pin-filename prefix the caller uses for node-wide
+	// programs and maps, e.g. "global" for "global_aws_conntrack_map". Per-pod
+	// pins instead carry a "<podName>@<namespace>" identifier.
+	GlobalPinPrefix string
 }
 
 type BpfSDKClient interface {
@@ -60,6 +74,7 @@ type BpfSDKClient interface {
 	RecoverGlobalMaps() (map[string]ebpf_maps.BpfMap, error)
 	RecoverAllBpfProgramsAndMaps() (map[string]BpfData, error)
 	GetAllBpfProgramsAndMaps() (map[string]BpfData, error)
+	GetProgIdentifierFromBPFPinPath(pinPath string) (string, string, bool)
 }
 
 type BpfData struct {
@@ -74,9 +89,16 @@ type BpfCustomData struct {
 }
 
 // mapClassifier classifies BPF pin paths as global vs per-namespace using the
-// configured set of namespaced map names.
+// caller-configured map names and global pin prefix.
 type mapClassifier struct {
-	namespacedMaps map[string]struct{}
+	namespacedMaps  map[string]struct{}
+	globalMaps      map[string]struct{}
+	globalPinPrefix string
+}
+
+func (m *mapClassifier) isGlobalMap(mapName string) bool {
+	_, ok := m.globalMaps[mapName]
+	return ok
 }
 
 type bpfSDKClient struct {
@@ -121,10 +143,18 @@ func New(cfg Config) BpfSDKClient {
 	for _, m := range cfg.NamespacedMaps {
 		nsSet[m] = struct{}{}
 	}
+	globalSet := make(map[string]struct{}, len(cfg.GlobalMaps))
+	for _, m := range cfg.GlobalMaps {
+		globalSet[m] = struct{}{}
+	}
 	return &bpfSDKClient{
-		mapClassifier: mapClassifier{namespacedMaps: nsSet},
-		mapApi:        &ebpf_maps.BpfMap{},
-		progApi:       &ebpf_progs.BpfProgram{},
+		mapClassifier: mapClassifier{
+			namespacedMaps:  nsSet,
+			globalMaps:      globalSet,
+			globalPinPrefix: cfg.GlobalPinPrefix,
+		},
+		mapApi:  &ebpf_maps.BpfMap{},
+		progApi: &ebpf_progs.BpfProgram{},
 	}
 }
 
@@ -141,9 +171,13 @@ func (b *bpfSDKClient) IncreaseRlimit() error {
 	return nil
 }
 
-func newElfLoader(elfFile *elf.File, bpfmapapi ebpf_maps.BpfMapAPIs, bpfprogapi ebpf_progs.BpfProgAPIs, customizedpinPath string, namespacedMaps map[string]struct{}) *elfLoader {
+// newElfLoader builds a loader for a single ELF file. classifier is passed
+// through from the SDK client so the loader classifies pin paths using the same
+// caller-supplied configuration - namespaced map names and the global pin
+// prefix - as recovery does.
+func newElfLoader(elfFile *elf.File, bpfmapapi ebpf_maps.BpfMapAPIs, bpfprogapi ebpf_progs.BpfProgAPIs, customizedpinPath string, classifier mapClassifier) *elfLoader {
 	elfloader := &elfLoader{
-		mapClassifier:     mapClassifier{namespacedMaps: namespacedMaps},
+		mapClassifier:     classifier,
 		elfFile:           elfFile,
 		bpfMapApi:         bpfmapapi,
 		bpfProgApi:        bpfprogapi,
@@ -169,7 +203,7 @@ func (b *bpfSDKClient) LoadBpfFile(path, customizedPinPath string) (map[string]B
 		return nil, nil, err
 	}
 
-	elfLoader := newElfLoader(elfFile, b.mapApi, b.progApi, customizedPinPath, b.namespacedMaps)
+	elfLoader := newElfLoader(elfFile, b.mapApi, b.progApi, customizedPinPath, b.mapClassifier)
 
 	bpfLoadedProg, bpfLoadedMaps, err := elfLoader.doLoadELF(BpfCustomData{})
 	if err != nil {
@@ -192,7 +226,7 @@ func (b *bpfSDKClient) LoadBpfFileWithCustomData(inputData BpfCustomData) (map[s
 		return nil, nil, err
 	}
 
-	elfLoader := newElfLoader(elfFile, b.mapApi, b.progApi, inputData.CustomPinPath, b.namespacedMaps)
+	elfLoader := newElfLoader(elfFile, b.mapApi, b.progApi, inputData.CustomPinPath, b.mapClassifier)
 
 	bpfLoadedProg, bpfLoadedMaps, err := elfLoader.doLoadELF(inputData)
 	if err != nil {
@@ -957,26 +991,114 @@ func (m *mapClassifier) isNamespacedMap(mapName string) bool {
 	return ok
 }
 
+// GetMapNameFromBPFPinPath splits a map pin filename into the map name and the
+// pod identifier that owns it.
+//
+// Per-pod pins are "<podName>@<namespace>_<mapName>". The pod name portion can
+// itself contain underscores, because the agent converts dots in pod names to
+// underscores when building the identifier - so the identifier/mapName boundary
+// is NOT necessarily the first underscore in the filename. It is always the
+// first underscore after the "@": "@" cannot appear in a map name, and a
+// namespace is a DNS-1123 label, which cannot contain an underscore.
+//
+// Global pins are "global_<mapName>" and have no "@".
+//
+// A filename matching neither shape cannot be split unambiguously - for example
+// a pre-"@" pin that the one-shot legacy migration did not rename. Rather than
+// guess a boundary and register the map under a wrong name, both return values
+// are empty so the caller skips it.
 func (m *mapClassifier) GetMapNameFromBPFPinPath(pinPath string) (string, string) {
 	splittedPinPath := strings.Split(pinPath, "/")
-	lastSegment := splittedPinPath[len(splittedPinPath)-1]
-	mapNamespace, mapName, _ := strings.Cut(lastSegment, "_")
-	log.Infof("Found Identified - %s : %s", mapNamespace, mapName)
+	pinnedMap := splittedPinPath[len(splittedPinPath)-1]
 
-	if m.isNamespacedMap(mapName) {
-		log.Infof("Adding %s -> %s", mapName, mapNamespace)
-		return mapName, mapNamespace
+	if podName, rest, found := strings.Cut(pinnedMap, "@"); found {
+		mapNamespace, mapName, ok := strings.Cut(rest, "_")
+		if !ok {
+			// This should not happen in the first place
+			log.Errorf("Map pin %s has no map name after the namespace, skipping", pinnedMap)
+			return "", ""
+		}
+		podIdentifier := podName + "@" + mapNamespace
+		log.Infof("Adding %s -> %s", mapName, podIdentifier)
+		return mapName, podIdentifier
 	}
 
-	log.Infof("Adding GLOBAL %s -> %s", mapName, mapName)
-	return mapName, mapName
+	// Global pins are "<globalPinPrefix>_<mapName>" where mapName is one of the
+	// configured global maps. Matching the name exactly - rather than trusting the
+	// prefix alone - keeps a pod whose name begins "global." from being mistaken
+	// for a global pin if its pin was never migrated to the "@" format.
+	if prefix, mapName, ok := strings.Cut(pinnedMap, "_"); ok && prefix == m.globalPinPrefix && m.isGlobalMap(mapName) {
+		log.Infof("Adding GLOBAL %s -> %s", mapName, mapName)
+		return mapName, mapName
+	}
+
+	log.Errorf("Unrecognized map pin format %s, skipping", pinnedMap)
+	return "", ""
 }
 
+// GetProgIdentifierFromBPFPinPath returns the pod identifier that owns the
+// program pinned at pinPath, and whether the pin is a node-wide (global) one.
+//
+// Two pin shapes are recognized:
+//
+//   - Per-pod:   "<podName>@<namespace>_<progName>". As with map pins, the pod
+//     name portion can contain underscores - the agent converts dots in pod
+//     names to underscores - so the identifier/progName boundary is the first
+//     underscore after the "@", never the first underscore in the filename.
+//     Returns ("<podName>@<namespace>", false).
+//   - Global:    "<globalPinPrefix>_<progName>" (no "@"). Returns ("", true).
+//     The SDK never creates global programs, so this only exists to let callers
+//     skip such a pin if one is ever encountered.
+//
+// A filename matching neither shape returns ("", false) so the caller skips it
+// rather than proceeding with a truncated identifier.
+//
+// Known limitation: a legacy pin (pre-"@" format) for a pod whose name begins
+// with the global prefix (e.g. "global.foo") has no "@" and a first segment of
+// "global", so it is classified as global and skipped rather than recovered.
+// This is bounded - such pins are renamed to the "@" format by the one-shot
+// migration in the agent - so it is accepted rather than special-cased here.
+func (b *bpfSDKClient) GetProgIdentifierFromBPFPinPath(pinPath string) (podIdentifier string, progName string, isGlobal bool) {
+	splittedPinPath := strings.Split(pinPath, "/")
+	pinnedProg := splittedPinPath[len(splittedPinPath)-1]
+
+	if podName, rest, found := strings.Cut(pinnedProg, "@"); found {
+		progNamespace, progName, ok := strings.Cut(rest, "_")
+		if !ok {
+			log.Errorf("Prog pin %s has no prog name after the namespace, skipping", pinnedProg)
+			return "", "", false
+		}
+		podIdentifier = podName + "@" + progNamespace
+		log.Infof("Found Identified - %s : %s", podIdentifier, progName)
+		return podIdentifier, progName, false
+	}
+
+	if prefix, progName, ok := strings.Cut(pinnedProg, "_"); ok && prefix == b.globalPinPrefix {
+		return "", progName, true
+	}
+
+	log.Errorf("Unrecognized prog pin format %s, skipping", pinnedProg)
+	return "", "", false
+}
+
+// IsMapGlobal reports whether the pin at pinPath is a node-wide map rather than
+// a per-pod one. This is a positive check against the configured global map
+// names: a name that is neither global nor namespaced - including the empty name
+// returned for an unparseable pin - is not reported as global, so callers do not
+// treat an unrecognized pin as one.
 func (m *mapClassifier) IsMapGlobal(pinPath string) bool {
 	mapName, _ := m.GetMapNameFromBPFPinPath(pinPath)
-	return !m.isNamespacedMap(mapName)
+	return m.isGlobalMap(mapName)
 }
 
+// RecoverGlobalMaps walks the BPF filesystem and reconstructs a map of all
+// node-wide (global) maps that were pinned there. It returns a map keyed by the
+// pin path, with each value containing the map's ID, FD, and metadata.
+//
+// Fails fast: on the first unreadable global pin it returns a nil map and the
+// error, because a partial global map set is unusable. This contrasts with
+// RecoverAllBpfProgramsAndMaps which collects per-pin failures and returns
+// everything it could rebuild alongside a non-nil ErrPartialRecovery error.
 func (b *bpfSDKClient) RecoverGlobalMaps() (map[string]ebpf_maps.BpfMap, error) {
 	_, err := os.Stat(constdef.BPF_DIR_MNT)
 	if err != nil {
@@ -984,6 +1106,11 @@ func (b *bpfSDKClient) RecoverGlobalMaps() (map[string]ebpf_maps.BpfMap, error) 
 		return nil, fmt.Errorf("BPF directory is not present %v", err)
 	}
 	loadedGlobalMaps := make(map[string]ebpf_maps.BpfMap)
+	// A global pin we cannot read is fatal: the conntrack and events maps are
+	// node-wide and every pod program binds to them, so a partial global map set
+	// is not usable. Fail fast on the first per-pin error rather than returning
+	// an incomplete set - unlike RecoverAllBpfProgramsAndMaps, which is per-pod
+	// and recovers partially.
 	var statfs syscall.Statfs_t
 	if err := syscall.Statfs(constdef.BPF_DIR_MNT, &statfs); err == nil && statfs.Type == unix.BPF_FS_MAGIC {
 		if err := filepath.Walk(constdef.MAP_BPF_FS, func(pinPath string, fsinfo os.FileInfo, err error) error {
@@ -991,12 +1118,12 @@ func (b *bpfSDKClient) RecoverGlobalMaps() (map[string]ebpf_maps.BpfMap, error) 
 				return err
 			}
 			if !fsinfo.IsDir() {
-				log.Infof("Dumping pinpaths - ", pinPath)
+				log.Infof("Dumping pinpaths - %s", pinPath)
 				if b.IsMapGlobal(pinPath) {
-					log.Infof("Found global pinpaths - ", pinPath)
+					log.Infof("Found global pinpaths - %s", pinPath)
 					bpfMapInfo, err := b.mapApi.GetMapFromPinPath(pinPath)
 					if err != nil {
-						log.Errorf("error getting mapInfo for Global pin path, this shouldn't happen")
+						log.Errorf("error getting mapInfo for Global pin path %s, this shouldn't happen", pinPath)
 						return err
 					}
 					mapID := bpfMapInfo.Id
@@ -1014,8 +1141,8 @@ func (b *bpfSDKClient) RecoverGlobalMaps() (map[string]ebpf_maps.BpfMap, error) 
 					//Fill New FD since old FDs will be deleted on recovery
 					mapFD, err := utils.GetMapFDFromID(int(mapID))
 					if err != nil {
-						log.Infof("Unable to GetFDfromID and ret %d and err %s", int(mapFD), err)
-						return fmt.Errorf("unable to get FD: %s", err)
+						log.Errorf("map pin %s: unable to get FD from ID %d: %v", pinPath, int(mapID), err)
+						return fmt.Errorf("unable to get FD from ID %d: %w", int(mapID), err)
 					}
 					recoveredBpfMap.MapFD = uint32(mapFD)
 					log.Infof("Recovered map Name %s and FD %d", mapName, mapFD)
@@ -1035,13 +1162,14 @@ func (b *bpfSDKClient) RecoverGlobalMaps() (map[string]ebpf_maps.BpfMap, error) 
 			}
 			return nil
 		}); err != nil {
-			log.Infof("Error walking bpf map directory:", err)
+			log.Errorf("Error walking bpf map directory: %v", err)
 			return nil, fmt.Errorf("error walking the bpfdirectory %v", err)
 		}
 	} else {
 		log.Infof("error checking BPF FS, please make sure it is mounted %v", err)
 		return nil, fmt.Errorf("error checking BPF FS, please make sure it is mounted")
 	}
+
 	return loadedGlobalMaps, nil
 }
 
@@ -1060,6 +1188,34 @@ func (b *bpfSDKClient) RecoverAllBpfProgramsAndMaps() (map[string]BpfData, error
 	mapPodSelector := make(map[string]map[int]string)
 	mapIDsToFDs := make(map[int]int)
 
+	// mapIDsToFDs contains handles opened during this recovery attempt. Close all FDs which were not
+	// recovered in the loadedPrograms map
+
+	defer func() {
+		returnedMapIDs := make(map[int]struct{})
+
+		for _, bpfData := range loadedPrograms {
+			for _, bpfMap := range bpfData.Maps {
+				returnedMapIDs[int(bpfMap.MapID)] = struct{}{}
+			}
+		}
+
+		for mapID, mapFD := range mapIDsToFDs {
+			if _, returned := returnedMapIDs[mapID]; returned {
+				continue
+			}
+
+			log.Infof("Closing non recovered map FD %d for map ID %d", mapFD, mapID)
+
+			if err := unix.Close(mapFD); err != nil {
+				log.Errorf(
+					"Failed to close non recovered map FD %d for map ID %d: %v",
+					mapFD, mapID, err,
+				)
+			}
+		}
+	}()
+
 	mapsDirExists := true
 	progsDirExists := true
 	_, err = os.Stat(constdef.MAP_BPF_FS)
@@ -1072,34 +1228,49 @@ func (b *bpfSDKClient) RecoverAllBpfProgramsAndMaps() (map[string]BpfData, error
 		progsDirExists = false
 	}
 
+	// recoveryErrs collects per-pin failures. A pin we cannot read costs only the
+	// workload that owns it, so the walk continues and the caller receives the
+	// state we did rebuild alongside the list of what we could not.
+	var recoveryErrs []error
+
 	if err := syscall.Statfs(constdef.BPF_DIR_MNT, &statfs); err == nil && statfs.Type == unix.BPF_FS_MAGIC {
 		if mapsDirExists {
 			if err := filepath.Walk(constdef.MAP_BPF_FS, func(pinPath string, fsinfo os.FileInfo, err error) error {
 				if err != nil {
-					return err
+					log.Errorf("Skipping map pin %s during recovery: %v", pinPath, err)
+					recoveryErrs = append(recoveryErrs, fmt.Errorf("map pin %s: %w", pinPath, err))
+					return nil
 				}
 				if !fsinfo.IsDir() {
-					log.Infof("Dumping pinpaths - ", pinPath)
+					log.Infof("Dumping pinpaths - %s", pinPath)
 
 					bpfMapInfo, err := b.mapApi.GetMapFromPinPath(pinPath)
 					if err != nil {
-						log.Infof("error getting mapInfo for pin path, this shouldn't happen")
-						return err
+						log.Errorf("Skipping map pin %s, unable to get mapInfo: %v", pinPath, err)
+						recoveryErrs = append(recoveryErrs, fmt.Errorf("map pin %s: unable to get mapInfo: %w", pinPath, err))
+						return nil
 					}
 					mapID := bpfMapInfo.Id
 					log.Infof("Got ID %d", mapID)
 					//Get map name
 					mapName, mapNamespace := b.GetMapNameFromBPFPinPath(pinPath)
+					if mapName == "" {
+						// Unparseable pin filename - already logged. Skip it rather
+						// than registering an empty name against this map ID.
+						recoveryErrs = append(recoveryErrs, fmt.Errorf("map pin %s: unrecognized pin format", pinPath))
+						return nil
+					}
 					mapIDsToNames[int(mapID)] = mapName
 
-					if b.IsMapGlobal(pinPath) {
+					if b.isGlobalMap(mapName) || !b.isNamespacedMap(mapName) {
 						return nil
 					}
 					//Fill New FD since old FDs will be deleted on recovery
 					mapFD, err := utils.GetMapFDFromID(int(mapID))
 					if err != nil {
-						log.Infof("Unable to GetFDfromID and ret %d and err %s", int(mapFD), err)
-						return fmt.Errorf("unable to get FD: %s", err)
+						log.Errorf("Skipping map pin %s, unable to get FD from ID %d: %v", pinPath, int(mapID), err)
+						recoveryErrs = append(recoveryErrs, fmt.Errorf("map pin %s: unable to get FD from ID %d: %w", pinPath, int(mapID), err))
+						return nil
 					}
 					log.Infof("Got FD %d", mapFD)
 					mapIDsToFDs[int(mapID)] = mapFD
@@ -1109,36 +1280,46 @@ func (b *bpfSDKClient) RecoverAllBpfProgramsAndMaps() (map[string]BpfData, error
 				}
 				return nil
 			}); err != nil {
-				log.Infof("Error walking bpf map directory:", err)
-				return nil, fmt.Errorf("failed walking the bpfdirectory %v", err)
+				// NOTE: This branch is effectively dead code under normal operation:
+				// the Walk callback above always returns nil (collecting per-pin
+				// failures into recoveryErrs), so filepath.Walk only returns a non-nil
+				// error if the root directory itself is unreadable.
+				// This is kept so that it handles any unexpected errors that may occur
+				// while walking the map directory.
+				log.Errorf("Error walking bpf map directory: %v", err)
+				return loadedPrograms, fmt.Errorf("failed walking the bpfdirectory %v", err)
 			}
 		}
 
 		if progsDirExists {
 			if err := filepath.Walk(constdef.PROG_BPF_FS, func(pinPath string, fsinfo os.FileInfo, err error) error {
 				if err != nil {
-					return err
+					log.Errorf("Skipping prog pin %s during recovery: %v", pinPath, err)
+					recoveryErrs = append(recoveryErrs, fmt.Errorf("prog pin %s: %w", pinPath, err))
+					return nil
 				}
 				if !fsinfo.IsDir() {
-					log.Infof("Dumping pinpaths - ", pinPath)
+					log.Infof("Dumping pinpaths - %s", pinPath)
 
 					pgmData := ebpf_progs.BpfProgram{
 						PinPath: pinPath,
 					}
-					splittedPinPath := strings.Split(pinPath, "/")
-					podIdentifier := strings.SplitN(splittedPinPath[len(splittedPinPath)-1], "_", 2)
-					log.Infof("Found Identified - %s : %s", podIdentifier[0], podIdentifier[1])
-
-					progNamespace := podIdentifier[0]
-					if progNamespace == "global" {
-						log.Infof("Skipping global progs")
+					progNamespace, _, isGlobal := b.GetProgIdentifierFromBPFPinPath(pinPath)
+					if isGlobal {
+						log.Infof("Skipping global progs if any - %s", pinPath)
+						return nil
+					}
+					if progNamespace == "" {
+						// Unparseable pin filename - already logged.
+						recoveryErrs = append(recoveryErrs, fmt.Errorf("prog pin %s: unrecognized pin format", pinPath))
 						return nil
 					}
 
 					bpfProgInfo, progFD, err := (b.progApi).GetProgFromPinPath(pinPath)
 					if err != nil {
-						log.Infof("Failed to progInfo for pinPath %s", pinPath)
-						return err
+						log.Errorf("Skipping prog pin %s, unable to get progInfo: %v", pinPath, err)
+						recoveryErrs = append(recoveryErrs, fmt.Errorf("prog pin %s: unable to get progInfo: %w", pinPath, err))
+						return nil
 					}
 					pgmData.ProgFD = progFD
 
@@ -1147,8 +1328,13 @@ func (b *bpfSDKClient) RecoverAllBpfProgramsAndMaps() (map[string]BpfData, error
 						log.Infof("Have associated maps to link")
 						associatedBpfMapList, associatedBPFMapIDs, err := ebpf_progs.BpfGetMapInfoFromProgInfo(progFD, bpfProgInfo.NrMapIDs)
 						if err != nil {
-							log.Infof("Failed to get associated maps")
-							return err
+							log.Errorf("Skipping prog pin %s, unable to get associated maps: %v", pinPath, err)
+							recoveryErrs = append(recoveryErrs, fmt.Errorf("prog pin %s: unable to get associated maps: %w", pinPath, err))
+							// The program is not going into loadedPrograms, so nothing
+							// will own this FD. The pin keeps the program alive in the
+							// kernel, so closing only releases our handle.
+							unix.Close(progFD)
+							return nil
 						}
 						for mapInfoIdx := 0; mapInfoIdx < len(associatedBpfMapList); mapInfoIdx++ {
 							bpfMapInfo := associatedBpfMapList[mapInfoIdx]
@@ -1160,8 +1346,17 @@ func (b *bpfSDKClient) RecoverAllBpfProgramsAndMaps() (map[string]BpfData, error
 
 							mapIds, ok := mapPodSelector[progNamespace]
 							if !ok {
-								log.Infof("Failed to get ID for %s", progNamespace)
-								return fmt.Errorf("failed to get err")
+								// None of this workload's map pins were recovered, so we
+								// have no name to key its maps under. Drop the whole
+								// program rather than returning it with an incomplete
+								// Maps set: callers gate on Program.ProgFD alone, so a
+								// partially-populated program is reused as if it were
+								// whole and its missing maps read back zero-valued.
+								// Omitting it makes the caller reload from scratch.
+								log.Errorf("prog pin %s: no recovered maps for %s, dropping program", pinPath, progNamespace)
+								recoveryErrs = append(recoveryErrs, fmt.Errorf("prog pin %s: no recovered maps for %s", pinPath, progNamespace))
+								unix.Close(progFD)
+								return nil
 							}
 							mapName := mapIds[int(recoveredBpfMap.MapID)]
 
@@ -1175,8 +1370,13 @@ func (b *bpfSDKClient) RecoverAllBpfProgramsAndMaps() (map[string]BpfData, error
 								//Fill New FD since old FDs will be deleted on recovery
 								localMapFD, ok := mapIDsToFDs[int(newMapID)]
 								if !ok {
-									log.Infof("Unable to get FD from ID %d", int(newMapID))
-									return fmt.Errorf("unable to get FD")
+									// Same reasoning as above: a program whose maps we
+									// cannot fully resolve is worse than no program, so
+									// drop it and let the caller reload.
+									log.Errorf("prog pin %s: unable to get FD from map ID %d (%s), dropping program", pinPath, int(newMapID), mapName)
+									recoveryErrs = append(recoveryErrs, fmt.Errorf("prog pin %s: unable to get FD from map ID %d (%s)", pinPath, int(newMapID), mapName))
+									unix.Close(progFD)
+									return nil
 								}
 								mapFD = localMapFD
 							}
@@ -1205,14 +1405,26 @@ func (b *bpfSDKClient) RecoverAllBpfProgramsAndMaps() (map[string]BpfData, error
 				}
 				return nil
 			}); err != nil {
-				log.Infof("Error walking bpf prog directory:", err)
-				return nil, fmt.Errorf("failed walking the bpfdirectory %v", err)
+				// NOTE: Same as the map-walk branch above — effectively dead code
+				// because the callback always returns nil. Only triggers if the
+				// programs directory itself becomes unreadable mid-walk.
+				log.Errorf("Error walking bpf prog directory: %v", err)
+				return loadedPrograms, fmt.Errorf("failed walking the bpfdirectory %v", err)
 			}
 		}
 	} else {
 		log.Infof("error checking BPF FS, please make sure it is mounted %v", err)
 		return nil, fmt.Errorf("error checking BPF FS, please make sure it is mounted")
 	}
+
+	if len(recoveryErrs) > 0 {
+		// Partial recovery: loadedPrograms holds everything we could rebuild. The
+		// caller must treat a non-nil error with a non-empty result as incomplete
+		// rather than as total failure.
+		return loadedPrograms, fmt.Errorf("%w: %d pin(s) skipped: %w",
+			ErrPartialRecovery, len(recoveryErrs), errors.Join(recoveryErrs...))
+	}
+
 	//Return DS here
 	return loadedPrograms, nil
 }
@@ -1243,24 +1455,37 @@ func (b *bpfSDKClient) GetAllBpfProgramsAndMaps() (map[string]BpfData, error) {
 		progsDirExists = false
 	}
 
+	// walkErrs collects per-pin failures so one unreadable pin does not cost the
+	// whole listing.
+	var walkErrs []error
+
 	if err := syscall.Statfs(constdef.BPF_DIR_MNT, &statfs); err == nil && statfs.Type == unix.BPF_FS_MAGIC {
 		if mapsDirExists {
 			if err := filepath.Walk(constdef.MAP_BPF_FS, func(pinPath string, fsinfo os.FileInfo, err error) error {
 				if err != nil {
-					return err
+					log.Errorf("Skipping map pin %s: %v", pinPath, err)
+					walkErrs = append(walkErrs, fmt.Errorf("map pin %s: %w", pinPath, err))
+					return nil
 				}
 				if !fsinfo.IsDir() {
-					log.Infof("Dumping pinpaths - ", pinPath)
+					log.Infof("Dumping pinpaths - %s", pinPath)
 
 					bpfMapInfo, err := b.mapApi.GetMapFromPinPath(pinPath)
 					if err != nil {
-						log.Infof("error getting mapInfo for pin path, this shouldn't happen")
-						return err
+						log.Errorf("Skipping map pin %s, unable to get mapInfo: %v", pinPath, err)
+						walkErrs = append(walkErrs, fmt.Errorf("map pin %s: unable to get mapInfo: %w", pinPath, err))
+						return nil
 					}
 					mapID := bpfMapInfo.Id
 					log.Infof("Got ID %d", mapID)
 					//Get map name
 					mapName, mapNamespace := b.GetMapNameFromBPFPinPath(pinPath)
+					if mapName == "" {
+						// Unparseable pin filename - already logged. Skip it rather
+						// than registering an empty name against this map ID.
+						walkErrs = append(walkErrs, fmt.Errorf("map pin %s: unrecognized pin format", pinPath))
+						return nil
+					}
 					mapIDsToNames[int(mapID)] = mapName
 
 					log.Infof("Adding ID %d to name %s and NS %s", mapID, mapName, mapNamespace)
@@ -1268,36 +1493,43 @@ func (b *bpfSDKClient) GetAllBpfProgramsAndMaps() (map[string]BpfData, error) {
 				}
 				return nil
 			}); err != nil {
-				log.Infof("Error walking bpfdirectory:", err)
-				return nil, fmt.Errorf("failed walking the bpfdirectory %v", err)
+				// NOTE: Effectively dead code — the Walk callback always returns nil,
+				// collecting per-pin failures into walkErrs. Only triggers if the
+				// maps directory itself becomes unreadable mid-walk.
+				log.Errorf("Error walking bpf map directory: %v", err)
+				return loadedPrograms, fmt.Errorf("failed walking the bpfdirectory %v", err)
 			}
 		}
 
 		if progsDirExists {
 			if err := filepath.Walk(constdef.PROG_BPF_FS, func(pinPath string, fsinfo os.FileInfo, err error) error {
 				if err != nil {
-					return err
+					log.Errorf("Skipping prog pin %s: %v", pinPath, err)
+					walkErrs = append(walkErrs, fmt.Errorf("prog pin %s: %w", pinPath, err))
+					return nil
 				}
 				if !fsinfo.IsDir() {
-					log.Infof("Dumping pinpaths - ", pinPath)
+					log.Infof("Dumping pinpaths - %s", pinPath)
 
 					pgmData := ebpf_progs.BpfProgram{
 						PinPath: pinPath,
 					}
-					splittedPinPath := strings.Split(pinPath, "/")
-					podIdentifier := strings.SplitN(splittedPinPath[len(splittedPinPath)-1], "_", 2)
-					log.Infof("Found Identified - %s : %s", podIdentifier[0], podIdentifier[1])
-
-					mapNamespace := podIdentifier[0]
-					if mapNamespace == "global" {
+					mapNamespace, _, isGlobal := b.GetProgIdentifierFromBPFPinPath(pinPath)
+					if isGlobal {
 						log.Infof("Skipping global progs")
+						return nil
+					}
+					if mapNamespace == "" {
+						// Unparseable pin filename - already logged.
+						walkErrs = append(walkErrs, fmt.Errorf("prog pin %s: unrecognized pin format", pinPath))
 						return nil
 					}
 
 					bpfProgInfo, progFD, err := (b.progApi).GetProgFromPinPath(pinPath)
 					if err != nil {
-						log.Infof("Failed to progInfo for pinPath %s", pinPath)
-						return err
+						log.Errorf("Skipping prog pin %s, unable to get progInfo: %v", pinPath, err)
+						walkErrs = append(walkErrs, fmt.Errorf("prog pin %s: unable to get progInfo: %w", pinPath, err))
+						return nil
 					}
 					pgmData.ProgID = int(bpfProgInfo.ID)
 					//Conv type to string here
@@ -1307,8 +1539,10 @@ func (b *bpfSDKClient) GetAllBpfProgramsAndMaps() (map[string]BpfData, error) {
 						log.Infof("Have associated maps to link")
 						associatedBpfMapList, associatedBPFMapIDs, err := ebpf_progs.BpfGetMapInfoFromProgInfo(progFD, bpfProgInfo.NrMapIDs)
 						if err != nil {
-							log.Infof("Failed to get associated maps")
-							return err
+							log.Errorf("Skipping prog pin %s, unable to get associated maps: %v", pinPath, err)
+							walkErrs = append(walkErrs, fmt.Errorf("prog pin %s: unable to get associated maps: %w", pinPath, err))
+							unix.Close(progFD)
+							return nil
 						}
 						//Close progFD..we don't need it
 						unix.Close(progFD)
@@ -1322,8 +1556,14 @@ func (b *bpfSDKClient) GetAllBpfProgramsAndMaps() (map[string]BpfData, error) {
 
 							mapIds, ok := mapPodSelector[mapNamespace]
 							if !ok {
-								log.Infof("Failed to ID for %s", mapNamespace)
-								return fmt.Errorf("failed to get err")
+								// No map pins recovered for this workload, so we have no
+								// name to key its maps under. Unlike the recovery path, this
+								// listing carries no FDs (MapFD is set to 0 below) and callers
+								// read only Program.ProgID or print it, so keep the program
+								// with the maps that did resolve rather than omitting it.
+								log.Errorf("prog pin %s: no recovered maps for %s, omitting map ID %d from listing", pinPath, mapNamespace, int(newMapID))
+								walkErrs = append(walkErrs, fmt.Errorf("prog pin %s: no recovered maps for %s", pinPath, mapNamespace))
+								continue
 							}
 							mapName := mapIds[int(recoveredBpfMap.MapID)]
 
@@ -1352,14 +1592,24 @@ func (b *bpfSDKClient) GetAllBpfProgramsAndMaps() (map[string]BpfData, error) {
 				}
 				return nil
 			}); err != nil {
-				log.Infof("Error walking bpfdirectory:", err)
-				return nil, fmt.Errorf("failed walking the bpfdirectory %v", err)
+				// NOTE: Same as the map-walk branch above — effectively dead code
+				// because the callback always returns nil. Only triggers if the
+				// programs directory itself becomes unreadable mid-walk.
+				log.Errorf("Error walking bpf prog directory: %v", err)
+				return loadedPrograms, fmt.Errorf("failed walking the bpfdirectory %v", err)
 			}
 		}
 	} else {
 		log.Infof("error checking BPF FS, please make sure it is mounted %v", err)
 		return nil, fmt.Errorf("error checking BPF FS, please make sure it is mounted")
 	}
+
+	if len(walkErrs) > 0 {
+		// Partial listing: loadedPrograms holds everything we could read.
+		return loadedPrograms, fmt.Errorf("%w: %d pin(s) skipped: %w",
+			ErrPartialRecovery, len(walkErrs), errors.Join(walkErrs...))
+	}
+
 	//Return DS here
 	return loadedPrograms, nil
 }
