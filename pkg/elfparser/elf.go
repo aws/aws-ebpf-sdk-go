@@ -20,6 +20,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path"
 	"path/filepath"
@@ -30,6 +31,7 @@ import (
 
 	"github.com/aws/aws-ebpf-sdk-go/pkg/cache"
 	constdef "github.com/aws/aws-ebpf-sdk-go/pkg/constants"
+	"github.com/aws/aws-ebpf-sdk-go/pkg/internal/btf"
 	"github.com/aws/aws-ebpf-sdk-go/pkg/logger"
 	ebpf_maps "github.com/aws/aws-ebpf-sdk-go/pkg/maps"
 	ebpf_progs "github.com/aws/aws-ebpf-sdk-go/pkg/progs"
@@ -42,6 +44,12 @@ var (
 	probeProgParams      = 1
 	kprobeProgParams     = 2
 	tracepointProgParams = 3
+)
+
+// src_reg values of a BPF_JMP|BPF_CALL insn (include/uapi/linux/bpf.h)
+const (
+	bpfPseudoCall      = 1
+	bpfPseudoKfuncCall = 2
 )
 
 var log = logger.Get()
@@ -114,6 +122,22 @@ type elfLoader struct {
 	// Support for BPF subprograms (__noinline static functions)
 	textSectionIndex int
 	textSection      *elf.Section
+
+	// Support for kfunc calls (extern ... __ksym functions) from program
+	// sections
+	kfuncResolver btf.KfuncResolver
+	kfuncs        map[string]btf.Kfunc
+	// progRelocs holds the relocation entries resolveKfuncs parsed, by
+	// program section index, so the relocation pass doesn't parse them again.
+	progRelocs map[uint32][]relocationEntry
+	// fdArray is passed to BPF_PROG_LOAD as fd_array. A module kfunc call
+	// carries an index into it in insn.off; slot 0 is reserved because
+	// off == 0 means vmlinux. One fd_array is shared by the ELF's programs,
+	// but only those in fdArrayProgs (sections with a module kfunc call) get
+	// it, so the others keep the shorter BPF_PROG_LOAD attr.
+	fdArray      []int32
+	fdArrayIndex map[int]int16
+	fdArrayProgs map[uint32]struct{}
 }
 
 func New(cfg Config) BpfSDKClient {
@@ -151,6 +175,9 @@ func newElfLoader(elfFile *elf.File, bpfmapapi ebpf_maps.BpfMapAPIs, bpfprogapi 
 		reloSectionMap:    make(map[uint32]*elf.Section),
 		progSectionMap:    make(map[uint32]progEntry),
 		textSectionIndex:  -1,
+		kfuncResolver:     btf.KernelKfuncResolver(),
+		fdArrayIndex:      make(map[int]int16),
+		fdArrayProgs:      make(map[uint32]struct{}),
 	}
 	return elfloader
 }
@@ -528,6 +555,12 @@ func (e *elfLoader) getRelocatedTextSection(loadedMaps map[string]ebpf_maps.BpfM
 
 		// Skip BPF_CALL relocations within .text (internal function calls)
 		if insnCode == (unix.BPF_JMP | unix.BPF_CALL) {
+			// Kfunc calls are only relocated in program sections. Skipping
+			// one here would leave a call the verifier rejects, so fail with
+			// a clear error instead.
+			if isKfuncSymbol(relEntry.symbol) {
+				return nil, nil, fmt.Errorf(".text: kfunc %s is called from a subprogram, which is not supported; call it from the program section (for example, from an __always_inline function)", relEntry.symbol.Name)
+			}
 			log.Infof(".text: skipping BPF_CALL relocation for %s at offset %d", relEntry.symbol.Name, relEntry.relOffset)
 			continue
 		}
@@ -587,7 +620,10 @@ func (e *elfLoader) parseAndApplyRelocSection(progIndex uint32, loadedMaps map[s
 		data = progData
 	}
 
-	relocationEntries, err := e.parseRelocationSection(reloSection, e.elfFile)
+	relocationEntries, ok := e.progRelocs[progIndex]
+	if !ok {
+		relocationEntries, err = e.parseRelocationSection(reloSection, e.elfFile)
+	}
 	if err != nil || len(relocationEntries) == 0 {
 		return nil, nil, fmt.Errorf("unable to parse relocation entries....")
 	}
@@ -615,6 +651,15 @@ func (e *elfLoader) parseAndApplyRelocSection(progIndex uint32, loadedMaps map[s
 		// Handle BPF-to-BPF function call relocations (for __noinline subprograms)
 		if ebpfInstruction.Code == (unix.BPF_JMP | unix.BPF_CALL) { // BPF_JMP | BPF_CALL
 			funcName := relocationEntry.symbol.Name
+			if isKfuncSymbol(relocationEntry.symbol) {
+				if err := e.relocateKfuncCall(data[relocationEntry.relOffset:relocationEntry.relOffset+bpfInsDefSize], funcName); err != nil {
+					return nil, nil, err
+				}
+				if e.kfuncs[funcName].Module != "" {
+					e.fdArrayProgs[progIndex] = struct{}{}
+				}
+				continue
+			}
 			// R_BPF_64_32 relocation for a call insn: clang encodes the callee
 			// target into insn.imm as (S + A) / 8 - 1, where S = the symbol's
 			// value and A = the addend.
@@ -641,7 +686,7 @@ func (e *elfLoader) parseAndApplyRelocSection(progIndex uint32, loadedMaps map[s
 
 			// Recover A = (insn.imm + 1) * bpfInsDefSize, then rebase onto the
 			// appended .text: target = progSectionSize + S + A.
-			ebpfInstruction.SrcReg = 1 // BPF_PSEUDO_CALL
+			ebpfInstruction.SrcReg = bpfPseudoCall
 			targetByteOffset := (ebpfInstruction.Imm + 1) * int32(bpfInsDefSize)
 			targetOffset := int32(progSectionSize) + int32(relocationEntry.symbol.Value) + targetByteOffset
 
@@ -703,6 +748,133 @@ func (e *elfLoader) parseAndApplyRelocSection(progIndex uint32, loadedMaps map[s
 
 }
 
+// isKfuncSymbol reports whether a call relocation targets a kfunc. Clang
+// relocates calls to an `extern ... __ksym` function against an undefined
+// global symbol; calls to subprograms are relocated against a defined symbol.
+func isKfuncSymbol(sym elf.Symbol) bool {
+	if sym.Section != elf.SHN_UNDEF || sym.Name == "" {
+		return false
+	}
+	bind := elf.ST_BIND(sym.Info)
+	typ := elf.ST_TYPE(sym.Info)
+	return (bind == elf.STB_GLOBAL || bind == elf.STB_WEAK) && (typ == elf.STT_NOTYPE || typ == elf.STT_FUNC)
+}
+
+// resolveKfuncs collects the kfuncs called from program sections and resolves
+// them against the running kernel's BTF. Kfunc calls from .text subprograms
+// are not supported; getRelocatedTextSection rejects them.
+func (e *elfLoader) resolveKfuncs() error {
+	// Most ELFs call no kfuncs. Check the symbol table first so that they
+	// don't parse their relocations twice and load exactly as before.
+	symbols, err := e.elfFile.Symbols()
+	if err != nil {
+		return nil // the relocation pass that follows reports it
+	}
+	hasKfuncSymbol := false
+	for _, sym := range symbols {
+		if isKfuncSymbol(sym) {
+			hasKfuncSymbol = true
+			break
+		}
+	}
+	if !hasKfuncSymbol {
+		return nil
+	}
+
+	seen := make(map[string]struct{})
+	var names []string
+	e.progRelocs = make(map[uint32][]relocationEntry)
+	for targetIndex, reloSection := range e.reloSectionMap {
+		// Only program sections can contain supported kfunc calls; other
+		// relocation sections, such as those for .text or debug info, are
+		// skipped.
+		if _, isProg := e.progSectionMap[targetIndex]; !isProg {
+			continue
+		}
+		// Unreadable sections are skipped here; the relocation pass that
+		// follows reports them.
+		target := e.elfFile.Sections[targetIndex]
+		data, err := target.Data()
+		if err != nil {
+			continue
+		}
+		entries, err := e.parseRelocationSection(reloSection, e.elfFile)
+		if err != nil {
+			continue
+		}
+		e.progRelocs[targetIndex] = entries
+		for _, entry := range entries {
+			// Only calls: an undefined symbol can also be a map defined in
+			// another ELF, which the map relocation path resolves by name.
+			if !isKfuncSymbol(entry.symbol) || entry.relOffset < 0 || entry.relOffset+bpfInsDefSize > len(data) ||
+				data[entry.relOffset] != (unix.BPF_JMP|unix.BPF_CALL) {
+				continue
+			}
+			// A kfunc is usually called from several places; resolve it once.
+			if _, ok := seen[entry.symbol.Name]; !ok {
+				seen[entry.symbol.Name] = struct{}{}
+				names = append(names, entry.symbol.Name)
+			}
+		}
+	}
+	if len(names) == 0 {
+		return nil
+	}
+
+	log.Infof("ELF calls kfuncs %v", names)
+	kfuncs, err := e.kfuncResolver.ResolveKfuncs(names)
+	if err != nil {
+		return err
+	}
+	e.kfuncs = kfuncs
+	return nil
+}
+
+// relocateKfuncCall rewrites a call insn into a kfunc call: src_reg =
+// BPF_PSEUDO_KFUNC_CALL, imm = the kfunc's BTF ID, off = 0 for vmlinux or the
+// module BTF fd's index in fd_array (kernel/bpf/verifier.c add_kfunc_call).
+func (e *elfLoader) relocateKfuncCall(insn []byte, name string) error {
+	kf, ok := e.kfuncs[name]
+	if !ok {
+		return fmt.Errorf("kfunc %q was not resolved", name)
+	}
+
+	// A vmlinux kfunc keeps off = 0. A module kfunc points at its module's
+	// BTF fd in fd_array; each module gets one slot, shared by every call
+	// into it, so the first call into a module adds the slot. Module, not
+	// the fd, tells them apart, since 0 is a valid fd.
+	var off int16
+	if kf.Module != "" {
+		idx, ok := e.fdArrayIndex[kf.ModuleBTFFD]
+		if !ok {
+			if len(e.fdArray) == 0 {
+				// Slot 0 is never used: off == 0 means vmlinux.
+				e.fdArray = append(e.fdArray, 0)
+			}
+			// insn.off is an s16, so fd_array indexes can't exceed it.
+			if len(e.fdArray) > math.MaxInt16 {
+				return fmt.Errorf("too many module BTFs for kfunc calls")
+			}
+			idx = int16(len(e.fdArray))
+			e.fdArray = append(e.fdArray, int32(kf.ModuleBTFFD))
+			e.fdArrayIndex[kf.ModuleBTFFD] = idx
+		}
+		off = idx
+	}
+
+	// Byte 1 of an insn packs dst_reg (low 4 bits) and src_reg (high 4 bits).
+	ebpfInstruction := &utils.BPFInsn{
+		Code:   insn[0],
+		DstReg: insn[1] & 0xf,
+		SrcReg: bpfPseudoKfuncCall,
+		Off:    off,
+		Imm:    int32(kf.BTFID),
+	}
+	copy(insn, ebpfInstruction.ConvertBPFInstructionToByteStream())
+	log.Debugf("Kfunc call relocation: %s -> BTF ID %d, module %q, fd_array index %d", name, kf.BTFID, kf.Module, off)
+	return nil
+}
+
 // countEntryPrograms returns the number of GLOBAL function symbols that live in
 // a program section (i.e. loadable entry programs, not .text subprograms).
 func (e *elfLoader) countEntryPrograms() (int, error) {
@@ -725,6 +897,13 @@ func (e *elfLoader) countEntryPrograms() (int, error) {
 func (e *elfLoader) parseProg(loadedMaps map[string]ebpf_maps.BpfMap) (map[string]ebpf_progs.CreateEBPFProgInput, error) {
 	//Get prog data
 	var pgmList = make(map[string]ebpf_progs.CreateEBPFProgInput)
+
+	// Resolve every kfunc the ELF calls up front, in one pass over the
+	// kernel's BTF, before any relocation needs them. Resolving per call
+	// instead would walk kernel BTF once per kfunc name.
+	if err := e.resolveKfuncs(); err != nil {
+		return nil, fmt.Errorf("failed to resolve kfuncs: %w", err)
+	}
 
 	// Pre-process .text section (BPF subprograms) with map relocations applied.
 	// textMaps holds maps referenced only from within subprograms; they must be
@@ -880,6 +1059,9 @@ func (e *elfLoader) parseProg(loadedMaps map[string]ebpf_maps.BpfMap) (map[strin
 							PinPath:        pinPath,
 							InsDefSize:     bpfInsDefSize,
 							AssociatedMaps: linkedMaps,
+						}
+						if _, ok := e.fdArrayProgs[progIndex]; ok {
+							progMetaData.FDArray = e.fdArray
 						}
 						pgmList[pinPath] = progMetaData
 					} else {

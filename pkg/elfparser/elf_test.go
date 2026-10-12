@@ -24,6 +24,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/aws/aws-ebpf-sdk-go/pkg/internal/btf"
 	ebpf_maps "github.com/aws/aws-ebpf-sdk-go/pkg/maps"
 	ebpf_progs "github.com/aws/aws-ebpf-sdk-go/pkg/progs"
 
@@ -1519,4 +1520,212 @@ func TestSubprogramInCustomSectionRejected(t *testing.T) {
 
 	_, err = elfLoader.parseProg(loadedMaps)
 	assert.Error(t, err, "call to a subprogram outside .text must be rejected")
+}
+
+type fakeKfuncResolver struct {
+	kfuncs map[string]btf.Kfunc
+	err    error
+	calls  [][]string
+}
+
+func (f *fakeKfuncResolver) ResolveKfuncs(names []string) (map[string]btf.Kfunc, error) {
+	f.calls = append(f.calls, append([]string(nil), names...))
+	if f.err != nil {
+		return nil, f.err
+	}
+	out := make(map[string]btf.Kfunc)
+	for _, n := range names {
+		kf, ok := f.kfuncs[n]
+		if !ok {
+			return nil, fmt.Errorf("kfunc %q not found in kernel BTF", n)
+		}
+		out[n] = kf
+	}
+	return out, nil
+}
+
+func parseKfuncELF(t *testing.T, path string, resolver btf.KfuncResolver) (map[string]ebpf_progs.CreateEBPFProgInput, error) {
+	m := setup(t, path)
+	defer m.ctrl.Finish()
+	f, err := os.Open(m.path)
+	if err != nil {
+		t.Fatalf("open test ELF: %v", err)
+	}
+	defer f.Close()
+
+	elfFile, err := elf.NewFile(f)
+	assert.NoError(t, err)
+	elfLoader := newElfLoader(elfFile, m.ebpf_maps, m.ebpf_progs, "test", nil)
+	elfLoader.kfuncResolver = resolver
+	assert.NoError(t, elfLoader.parseSection())
+
+	mapData, err := elfLoader.parseMap(BpfCustomData{})
+	assert.NoError(t, err)
+	m.ebpf_maps.EXPECT().CreateBPFMap(gomock.Any()).Return(ebpf_maps.BpfMap{MapFD: 5}, nil).AnyTimes()
+	m.ebpf_maps.EXPECT().GetBPFmapInfo(gomock.Any()).Return(ebpf_maps.BpfMapInfo{Id: 100}, nil).AnyTimes()
+	m.ebpf_maps.EXPECT().GetMapFromPinPath(gomock.Any()).Return(ebpf_maps.BpfMapInfo{Id: 100}, nil).AnyTimes()
+	loadedMaps, err := elfLoader.loadMap(mapData)
+	assert.NoError(t, err)
+
+	return elfLoader.parseProg(loadedMaps)
+}
+
+type callInsn struct {
+	srcReg uint8
+	off    int16
+	imm    int32
+}
+
+func callInsns(prog []byte) []callInsn {
+	var calls []callInsn
+	for i := 0; i+bpfInsDefSize <= len(prog); i += bpfInsDefSize {
+		if prog[i] != (unix.BPF_JMP | unix.BPF_CALL) {
+			continue
+		}
+		calls = append(calls, callInsn{
+			srcReg: prog[i+1] >> 4, // high 4 bits of byte 1
+			off:    int16(binary.LittleEndian.Uint16(prog[i+2:])),
+			imm:    int32(binary.LittleEndian.Uint32(prog[i+4:])),
+		})
+	}
+	return calls
+}
+
+// TestKfuncRelocation verifies that calls to extern __ksym functions from the
+// program section are rewritten into BPF_PSEUDO_KFUNC_CALLs and that module
+// kfuncs get an fd_array slot.
+func TestKfuncRelocation(t *testing.T) {
+	// Arbitrary values from the fake resolver; the test checks that they end up
+	// in fd_array and in the rewritten insns' imm.
+	const modFD = 42
+	ids := map[string]int32{"bpf_skb_ct_lookup": 1001, "bpf_ct_change_timeout": 1002, "bpf_ct_release": 1003}
+
+	tests := []struct {
+		name        string
+		module      string
+		moduleFD    int
+		wantOff     int16
+		wantFDArray []int32
+	}{
+		{name: "module kfuncs", module: "nf_conntrack", moduleFD: modFD, wantOff: 1, wantFDArray: []int32{0, modFD}},
+		// 0 is a valid fd, so it must not be mistaken for vmlinux.
+		{name: "module kfuncs with fd 0", module: "nf_conntrack", moduleFD: 0, wantOff: 1, wantFDArray: []int32{0, 0}},
+		{name: "vmlinux kfuncs", wantOff: 0, wantFDArray: nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resolver := &fakeKfuncResolver{kfuncs: map[string]btf.Kfunc{}}
+			for name, id := range ids {
+				resolver.kfuncs[name] = btf.Kfunc{BTFID: uint32(id), Module: tt.module, ModuleBTFFD: tt.moduleFD}
+			}
+
+			progs, err := parseKfuncELF(t, "../../test-data/tc.kfunc.bpf.elf", resolver)
+			if !assert.NoError(t, err) {
+				return
+			}
+			assert.Len(t, resolver.calls, 1, "kfuncs must be resolved in a single batch")
+			if len(resolver.calls) == 1 {
+				assert.ElementsMatch(t, []string{"bpf_skb_ct_lookup", "bpf_ct_change_timeout", "bpf_ct_release"}, resolver.calls[0])
+			}
+			assert.Len(t, progs, 1)
+
+			for _, prog := range progs {
+				assert.Equal(t, tt.wantFDArray, prog.FDArray)
+
+				wantImms := map[int32]bool{1001: true, 1002: true, 1003: true}
+				kfuncCalls, subprogCalls := 0, 0
+				for _, c := range callInsns(prog.ProgData) {
+					switch c.srcReg {
+					case bpfPseudoKfuncCall:
+						kfuncCalls++
+						assert.True(t, wantImms[c.imm], "unexpected kfunc BTF ID %d", c.imm)
+						assert.Equal(t, tt.wantOff, c.off)
+					case bpfPseudoCall:
+						subprogCalls++
+					}
+				}
+				// handle_kfunc: lookup + release; inlined shorten(): lookup +
+				// change_timeout + release.
+				assert.Equal(t, 5, kfuncCalls)
+				assert.Equal(t, 0, subprogCalls)
+			}
+		})
+	}
+}
+
+func TestKfuncResolutionFailure(t *testing.T) {
+	_, err := parseKfuncELF(t, "../../test-data/tc.kfunc.bpf.elf", &fakeKfuncResolver{err: errors.New("vmlinux BTF not found")})
+	assert.ErrorContains(t, err, "failed to resolve kfuncs: vmlinux BTF not found")
+
+	_, err = parseKfuncELF(t, "../../test-data/tc.kfunc.bpf.elf", &fakeKfuncResolver{kfuncs: map[string]btf.Kfunc{
+		"bpf_skb_ct_lookup": {BTFID: 1}, "bpf_ct_release": {BTFID: 2},
+	}})
+	assert.ErrorContains(t, err, `kfunc "bpf_ct_change_timeout" not found`)
+}
+
+// TestKfuncFromSubprogramRejected verifies that a kfunc call from a .text
+// subprogram fails with a clear error instead of producing a program the
+// verifier rejects.
+func TestKfuncFromSubprogramRejected(t *testing.T) {
+	resolver := &fakeKfuncResolver{kfuncs: map[string]btf.Kfunc{}}
+	for i, name := range []string{"bpf_skb_ct_lookup", "bpf_ct_change_timeout", "bpf_ct_release"} {
+		resolver.kfuncs[name] = btf.Kfunc{BTFID: uint32(1001 + i)}
+	}
+	_, err := parseKfuncELF(t, "../../test-data/tc.kfunc_subprog.bpf.elf", resolver)
+	assert.ErrorContains(t, err, "is called from a subprogram, which is not supported")
+}
+
+// TestNoKfuncsSkipsResolver verifies ELFs without kfunc calls never touch the
+// kernel BTF, don't parse their relocations an extra time and load without an
+// fd_array.
+func TestNoKfuncsSkipsResolver(t *testing.T) {
+	m := setup(t, "../../test-data/tc.subprog.bpf.elf")
+	defer m.ctrl.Finish()
+	f, err := os.Open(m.path)
+	if err != nil {
+		t.Fatalf("open test ELF: %v", err)
+	}
+	defer f.Close()
+
+	elfFile, err := elf.NewFile(f)
+	assert.NoError(t, err)
+	elfLoader := newElfLoader(elfFile, m.ebpf_maps, m.ebpf_progs, "test", nil)
+	resolver := &fakeKfuncResolver{err: errors.New("must not be called")}
+	elfLoader.kfuncResolver = resolver
+	assert.NoError(t, elfLoader.parseSection())
+	mapData, err := elfLoader.parseMap(BpfCustomData{})
+	assert.NoError(t, err)
+	m.ebpf_maps.EXPECT().CreateBPFMap(gomock.Any()).Return(ebpf_maps.BpfMap{MapFD: 5}, nil).AnyTimes()
+	m.ebpf_maps.EXPECT().GetMapFromPinPath(gomock.Any()).Return(ebpf_maps.BpfMapInfo{Id: 100}, nil).AnyTimes()
+	loadedMaps, err := elfLoader.loadMap(mapData)
+	assert.NoError(t, err)
+
+	progs, err := elfLoader.parseProg(loadedMaps)
+	assert.NoError(t, err)
+	assert.Empty(t, resolver.calls)
+	assert.Nil(t, elfLoader.progRelocs, "relocations must only be parsed by the relocation pass")
+	for _, prog := range progs {
+		assert.Empty(t, prog.FDArray)
+	}
+}
+
+func TestIsKfuncSymbol(t *testing.T) {
+	info := func(bind elf.SymBind, typ elf.SymType) uint8 { return elf.ST_INFO(bind, typ) }
+	tests := []struct {
+		name string
+		sym  elf.Symbol
+		want bool
+	}{
+		{"undefined global notype", elf.Symbol{Name: "bpf_ct_release", Section: elf.SHN_UNDEF, Info: info(elf.STB_GLOBAL, elf.STT_NOTYPE)}, true},
+		{"undefined weak func", elf.Symbol{Name: "k", Section: elf.SHN_UNDEF, Info: info(elf.STB_WEAK, elf.STT_FUNC)}, true},
+		{"defined .text section symbol", elf.Symbol{Name: ".text", Section: 2, Info: info(elf.STB_LOCAL, elf.STT_SECTION)}, false},
+		{"undefined local", elf.Symbol{Name: "k", Section: elf.SHN_UNDEF, Info: info(elf.STB_LOCAL, elf.STT_NOTYPE)}, false},
+		{"undefined object", elf.Symbol{Name: "k", Section: elf.SHN_UNDEF, Info: info(elf.STB_GLOBAL, elf.STT_OBJECT)}, false},
+		{"unnamed", elf.Symbol{Section: elf.SHN_UNDEF, Info: info(elf.STB_GLOBAL, elf.STT_NOTYPE)}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, isKfuncSymbol(tt.sym))
+		})
+	}
 }
