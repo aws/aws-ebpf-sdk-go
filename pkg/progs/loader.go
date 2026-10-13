@@ -80,6 +80,10 @@ type CreateEBPFProgInput struct {
 	PinPath        string
 	InsDefSize     int
 	AssociatedMaps map[int]string
+	// FDArray is passed as BPF_PROG_LOAD's fd_array. It holds the module BTF
+	// fds referenced by kfunc calls (insn.off indexes into it). Empty when the
+	// program calls no module kfuncs.
+	FDArray []int32
 }
 
 type BpfProgram struct {
@@ -128,6 +132,38 @@ type BpfProgInfo struct {
 	ProgTags             uint64
 	RunTimeNS            uint64
 	RunCnt               uint64
+}
+
+/*
+ * Prefix of the anonymous struct used by BPF_PROG_LOAD, up to and including
+ * fd_array (include/uapi/linux/bpf.h). Only used for programs that need
+ * fd_array; the kernel requires the bytes past the fields it knows to be zero,
+ * so the unused fields are left zeroed.
+ */
+type bpfProgLoadAttr struct {
+	progType           uint32
+	insnCnt            uint32
+	insns              unsafe.Pointer
+	license            unsafe.Pointer
+	logLevel           uint32
+	logSize            uint32
+	logBuf             unsafe.Pointer
+	kernVersion        uint32
+	progFlags          uint32
+	progName           [constdef.BPFObjNameLen]byte
+	progIfindex        uint32
+	expectedAttachType uint32
+	progBTFFD          uint32
+	funcInfoRecSize    uint32
+	funcInfo           uint64
+	funcInfoCnt        uint32
+	lineInfoRecSize    uint32
+	lineInfo           uint64
+	lineInfoCnt        uint32
+	attachBTFID        uint32
+	attachProgFD       uint32
+	coreReloCnt        uint32
+	fdArray            unsafe.Pointer
 }
 
 type BpfProgAttr struct {
@@ -267,7 +303,8 @@ func (m *BpfProgram) LoadProg(progMetaData CreateEBPFProgInput) (int, error) {
 	license := []byte(progMetaData.LicenseStr)
 	program.License = uintptr(unsafe.Pointer(&license[0]))
 
-	fd, errno := loadProgWithRetry(func() (uintptr, syscall.Errno) {
+	attrSize := unsafe.Sizeof(program)
+	load := func() (uintptr, syscall.Errno) {
 		r, _, e := unix.Syscall(unix.SYS_BPF,
 			uintptr(constdef.BPF_PROG_LOAD),
 			uintptr(unsafe.Pointer(&program)),
@@ -276,9 +313,38 @@ func (m *BpfProgram) LoadProg(progMetaData CreateEBPFProgInput) (int, error) {
 		runtime.KeepAlive(license)
 		runtime.KeepAlive(logBuf)
 		return r, e
-	})
+	}
+	// netlink.BPFAttr ends before fd_array, so programs that call module
+	// kfuncs are loaded with the longer attr. Everything else keeps using
+	// netlink.BPFAttr, which kernels that predate fd_array (5.14) accept.
+	if len(progMetaData.FDArray) > 0 {
+		attr := bpfProgLoadAttr{
+			progType: program.ProgType,
+			insnCnt:  program.InsnCnt,
+			insns:    unsafe.Pointer(&progMetaData.ProgData[0]),
+			license:  unsafe.Pointer(&license[0]),
+			logLevel: program.LogLevel,
+			logSize:  program.LogSize,
+			logBuf:   unsafe.Pointer(&logBuf[0]),
+			fdArray:  unsafe.Pointer(&progMetaData.FDArray[0]),
+		}
+		attrSize = unsafe.Sizeof(attr)
+		load = func() (uintptr, syscall.Errno) {
+			r, _, e := unix.Syscall(unix.SYS_BPF,
+				uintptr(constdef.BPF_PROG_LOAD),
+				uintptr(unsafe.Pointer(&attr)),
+				unsafe.Sizeof(attr))
+			runtime.KeepAlive(progMetaData.ProgData)
+			runtime.KeepAlive(progMetaData.FDArray)
+			runtime.KeepAlive(license)
+			runtime.KeepAlive(logBuf)
+			return r, e
+		}
+	}
 
-	log.Infof("Load prog done with fd : %d errno: %d (%s) insnCnt: %d attrSize: %d progType: %d", int(fd), int(errno), errno.Error(), program.InsnCnt, unsafe.Sizeof(program), program.ProgType)
+	fd, errno := loadProgWithRetry(load)
+
+	log.Infof("Load prog done with fd : %d errno: %d (%s) insnCnt: %d attrSize: %d progType: %d", int(fd), int(errno), errno.Error(), program.InsnCnt, attrSize, program.ProgType)
 	if errno != 0 {
 		// Surface the verifier log captured during the load above for diagnostics.
 		if verifierLog := verifierLogString(logBuf); len(verifierLog) > 0 {

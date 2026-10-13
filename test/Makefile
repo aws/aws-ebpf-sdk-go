@@ -24,6 +24,13 @@ build-test-bpf: $(TARGETS)
 %.elf: %.c
 	$(CLANG) $(CLANG_INCLUDE) $(CFLAGS) -c $< -o $@
 
+# The kfunc test loads the unit tests' fixture. -I$(SRCDIR) finds this
+# directory's vmlinux.h when ../test-data has none.
+KFUNC_ELF := ../test-data/tc.kfunc.bpf.elf
+build-test-bpf: $(KFUNC_ELF)
+$(KFUNC_ELF): ../test-data/tc.kfunc.bpf.c vmlinuxh
+	$(CLANG) $(CLANG_INCLUDE) -I$(SRCDIR) $(CFLAGS) -c $< -o $@
+
 
 vmlinuxh:
 	bpftool btf dump file /sys/kernel/btf/vmlinux format c > $(abspath c/vmlinux.h)
