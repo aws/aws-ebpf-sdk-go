@@ -207,7 +207,7 @@ func (m *BpfMap) CreateBPFMap(MapMetaData CreateEBPFMapInput) (BpfMap, error) {
 
 	if (errno < 0) || (int(ret) == -1) {
 		log.Errorf("Unable to create map and ret %d and err %s", int(ret), errno)
-		return BpfMap{}, fmt.Errorf("unable to create map: %s", errno)
+		return BpfMap{}, fmt.Errorf("unable to create map: %w", errno)
 	}
 
 	log.Infof("Create map done with fd : %d", int(ret))
@@ -318,7 +318,7 @@ func (m *BpfMap) CreateUpdateMapEntry(key, value uintptr, updateFlags uint64) er
 
 	if errno != 0 {
 		log.Errorf("unable to create/update map entry and ret %d and err %s", int(ret), errno)
-		return fmt.Errorf("unable to update map: %s", errno)
+		return fmt.Errorf("unable to update map: %w", errno)
 	}
 
 	log.Debugf("Create/Update map entry done with ret : %d", int(ret))
@@ -340,7 +340,7 @@ func (m *BpfMap) DeleteMapEntry(key uintptr) error {
 	)
 	if errno != 0 {
 		log.Errorf("unable to delete map entry and ret %d and err %s", int(ret), errno)
-		return fmt.Errorf("unable to update map: %s", errno)
+		return fmt.Errorf("unable to update map: %w", errno)
 	}
 
 	log.Debugf("Delete map entry done with ret : %d", int(ret))
@@ -372,7 +372,7 @@ func (m *BpfMap) GetNextMapEntry(key, nextKey uintptr) error {
 	}
 	if errno != 0 {
 		log.Errorf("unable to get next map entry and ret %d and err %s", int(ret), errno)
-		return fmt.Errorf("unable to get next map entry: %s", errno)
+		return fmt.Errorf("unable to get next map entry: %w", errno)
 	}
 
 	log.Debugf("Got next map entry with ret: %d", int(ret))
@@ -431,7 +431,7 @@ func (m *BpfMap) GetMapEntry(key, value uintptr) error {
 	)
 	if errno != 0 {
 		log.Errorf("unable to get map entry and ret %d and err %s", int(ret), errno)
-		return fmt.Errorf("unable to get next map entry: %s", errno)
+		return fmt.Errorf("unable to get next map entry: %w", errno)
 	}
 
 	log.Debugf("Got map entry with ret: %d", int(ret))
@@ -656,7 +656,7 @@ func GetNextMapEntryByID(key, nextKey uintptr, mapID int) error {
 	}
 	if errno != 0 {
 		log.Errorf("unable to get next map entry and ret %d and err %s", int(ret), errno)
-		return fmt.Errorf("unable to get next map entry: %s", errno)
+		return fmt.Errorf("unable to get next map entry: %w", errno)
 	}
 
 	log.Debugf("Got next map entry with ret: %d", int(ret))
@@ -686,7 +686,7 @@ func GetMapEntryByID(key, value uintptr, mapID int) error {
 
 	if errno != 0 {
 		log.Errorf("unable to get map entry and ret %d and err %s", int(ret), errno)
-		return fmt.Errorf("unable to get next map entry: %s", errno)
+		return fmt.Errorf("unable to get next map entry: %w", errno)
 	}
 
 	log.Debugf("Got map entry with ret : %d", int(ret))

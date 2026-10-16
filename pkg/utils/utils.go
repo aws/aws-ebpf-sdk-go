@@ -77,7 +77,7 @@ func PinObject(objFD uint32, pinPath string) error {
 	)
 	if errno < 0 {
 		log.Infof("Unable to pin map and ret %d and err %s", int(ret), errno)
-		return fmt.Errorf("Unable to pin map: %s", errno)
+		return fmt.Errorf("Unable to pin map: %w", errno)
 	}
 	//TODO : might have to return FD for node agent
 	log.Infof("Pin done with fd : %d and errno %d", ret, errno)
