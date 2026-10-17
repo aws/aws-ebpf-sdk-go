@@ -252,21 +252,13 @@ func (e *elfLoader) loadMap(parsedMapData []ebpf_maps.CreateEBPFMapInput) (map[s
 			return nil, err
 		}
 
-		//Fill ID
-		if loadedMaps.PinOptions.Type == constdef.PIN_NONE.Index() {
-			mapInfo, err := (e.bpfMapApi).GetBPFmapInfo(bpfMap.MapFD)
-			if err != nil {
-				return nil, fmt.Errorf("failed to get map info '%s'", mapNameStr)
-			}
-			bpfMap.MapID = uint32(mapInfo.Id)
-		} else {
-			mapInfo, err := (e.bpfMapApi).GetMapFromPinPath(pinPath)
-			if err != nil {
-				return nil, fmt.Errorf("map '%s' doesn't exist", mapNameStr)
-			}
-			mapID := uint32(mapInfo.Id)
-			bpfMap.MapID = mapID
+		// Fill ID from the FD we just created, never by re-opening the pin path: a
+		// concurrent load sharing that path can replace the object before we read back.
+		mapInfo, err := (e.bpfMapApi).GetBPFmapInfo(bpfMap.MapFD)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get map info '%s'", mapNameStr)
 		}
+		bpfMap.MapID = uint32(mapInfo.Id)
 
 		programmedMaps[loadedMaps.Name] = bpfMap
 
