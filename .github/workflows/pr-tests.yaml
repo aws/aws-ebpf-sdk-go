@@ -10,6 +10,34 @@ permissions:
   contents: read
 
 jobs:
+  pointer-safety:
+    name: Pointer safety
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout latest commit in the PR
+        uses: actions/checkout@v3
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: 'go.mod'
+      - name: Test the analyzer
+        run: cd tools/ptrcheck && go test ./...
+      # Reports pointers converted to uintptr and stored, which go stale when the
+      # runtime moves the goroutine stack. Occurrences that cannot be fixed, such
+      # as addresses handed to a third-party struct with uintptr fields, carry a
+      # //ptrcheck:ignore comment explaining why.
+      #
+      # Advisory while the outstanding occurrences are migrated to unsafe.Pointer.
+      # continue-on-error lets the analyzer exit non-zero, which marks this step
+      # red in the run log, while the job itself stays green so the PR is not
+      # blocked. The findings are in the step's log output. Drop continue-on-error
+      # to make this blocking once the migration lands.
+      - name: Check for stale uintptr pointer conversions (advisory)
+        continue-on-error: true
+        run: |
+          cd tools/ptrcheck && go build -o "${RUNNER_TEMP}/ptrcheck" ./cmd/ptrcheck
+          cd "${GITHUB_WORKSPACE}" && "${RUNNER_TEMP}/ptrcheck" ./pkg/...
+
   unit-test:
     name: Unit test
     runs-on: ubuntu-latest
