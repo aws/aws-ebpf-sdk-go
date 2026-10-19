@@ -18,6 +18,7 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"unsafe"
 
 	"github.com/aws/aws-ebpf-sdk-go/pkg/metrics"
 	"github.com/stretchr/testify/assert"
@@ -146,4 +147,21 @@ func TestLoadProgWithRetry_NonEAGAINErrorNotRetried(t *testing.T) {
 	assert.Equal(t, 1, *calls, "non-EAGAIN errors are returned immediately")
 	assert.Equal(t, retriesBefore, metrics.ProgLoadEAGAINRetries())
 	assert.Equal(t, exhaustedBefore, metrics.ProgLoadEAGAINExhausted())
+}
+
+// TestProgLoadAttrLayout pins bpfProgLoadAttr to the kernel's BPF_PROG_LOAD
+// layout (include/uapi/linux/bpf.h); fd_array must land at offset 120.
+// The expected offsets are those of the BPF_PROG_LOAD fields in union bpf_attr
+// on 64-bit hosts, where pointer fields are 8-byte aligned __aligned_u64s.
+func TestProgLoadAttrLayout(t *testing.T) {
+	var attr bpfProgLoadAttr
+	assert.Equal(t, uintptr(8), unsafe.Offsetof(attr.insns))
+	assert.Equal(t, uintptr(32), unsafe.Offsetof(attr.logBuf))
+	assert.Equal(t, uintptr(48), unsafe.Offsetof(attr.progName))
+	assert.Equal(t, uintptr(72), unsafe.Offsetof(attr.progBTFFD))
+	assert.Equal(t, uintptr(80), unsafe.Offsetof(attr.funcInfo))
+	assert.Equal(t, uintptr(96), unsafe.Offsetof(attr.lineInfo))
+	assert.Equal(t, uintptr(112), unsafe.Offsetof(attr.attachProgFD))
+	assert.Equal(t, uintptr(120), unsafe.Offsetof(attr.fdArray))
+	assert.Equal(t, uintptr(128), unsafe.Sizeof(attr))
 }

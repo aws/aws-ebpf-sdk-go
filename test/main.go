@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"os/exec"
 	"strings"
 	"syscall"
 	"text/tabwriter"
@@ -59,6 +60,7 @@ func main() {
 		{Name: "Test loading Program", Func: TestLoadProg},
 		{Name: "Test loading V6 Program", Func: TestLoadv6Prog},
 		{Name: "Test loading TC filter", Func: TestLoadTCfilter},
+		{Name: "Test loading kfunc Program", Func: TestLoadKfuncProg},
 		{Name: "Test loading Maps without Program", Func: TestLoadMapWithNoProg},
 		{Name: "Test loading Map operations", Func: TestMapOperations},
 		{Name: "Test updating Map size", Func: TestLoadMapWithCustomSize},
@@ -126,6 +128,35 @@ func TestLoadv6Prog() error {
 
 	for pinPath, _ := range progInfo {
 		fmt.Println("Prog Info: ", "Pin Path: ", pinPath)
+	}
+	return nil
+}
+
+func TestLoadKfuncProg() error {
+	// The kfuncs live in nf_conntrack, which may be a module that isn't loaded.
+	if out, err := exec.Command("modprobe", "nf_conntrack").CombinedOutput(); err != nil {
+		fmt.Println("modprobe nf_conntrack failed", "err:", err, "output:", strings.TrimSpace(string(out)))
+	}
+	// With nf_conntrack as a module, the kfuncs are only in its BTF, so the
+	// load below goes through fd_array (the SDK logs the resolved module).
+	if _, err := os.Stat("/sys/kernel/btf/nf_conntrack"); err == nil {
+		fmt.Println("nf_conntrack is a module: kfunc calls must use fd_array")
+	} else {
+		fmt.Println("nf_conntrack BTF not found as a module: kfuncs must be in vmlinux")
+	}
+
+	gosdkClient := goelf.New(goelf.Config{})
+	progInfo, _, err := gosdkClient.LoadBpfFile("../test-data/tc.kfunc.bpf.elf", "test")
+	if err != nil {
+		fmt.Println("Load BPF failed", "err:", err)
+		return err
+	}
+
+	for pinPath, prog := range progInfo {
+		fmt.Println("Prog Info: ", "Pin Path: ", pinPath)
+		if prog.Program.ProgFD <= 0 {
+			return fmt.Errorf("invalid prog FD %d for %s", prog.Program.ProgFD, pinPath)
+		}
 	}
 	return nil
 }
