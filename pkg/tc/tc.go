@@ -36,7 +36,7 @@ type BpfTc interface {
 	TCIngressDetach(interfaceName string) error
 	TCEgressAttach(interfaceName string, progFD int, funcName string) error
 	TCEgressDetach(interfaceName string) error
-	CleanupQdiscs(ingressCleanup bool, egressCleanup bool) error
+	CleanupQdiscs(podIngressCleanup bool, podEgressCleanup bool) error
 	GetAllAttachedProgIds() (map[string]int, map[string]int, error)
 }
 
@@ -264,7 +264,7 @@ func (m *bpfTc) TCEgressDetach(interfaceName string) error {
 	return fmt.Errorf("no active filter to detach-%s", interfaceName)
 }
 
-func (m *bpfTc) CleanupQdiscs(ingressCleanup bool, egressCleanup bool) error {
+func (m *bpfTc) CleanupQdiscs(podIngressCleanup bool, podEgressCleanup bool) error {
 
 	if len(m.InterfacePrefix) == 0 {
 		log.Errorf("invalid empty prefix")
@@ -280,22 +280,27 @@ func (m *bpfTc) CleanupQdiscs(ingressCleanup bool, egressCleanup bool) error {
 	for _, link := range linkList {
 		linkName := link.Attrs().Name
 		if err := mismatchedInterfacePrefix(linkName, m.InterfacePrefix); err == nil {
-			if ingressCleanup {
-				log.Infof("Trying to cleanup ingress on %s", linkName)
-				err = m.TCIngressDetach(linkName)
+			// TC hooks are named from the host's perspective, so pod direction
+			// inverts: a pod-ingress program lives on the host tc-egress hook,
+			// and a pod-egress program lives on the host tc-ingress hook. The
+			// attach path (attachIngressBPFProbe/attachEgressBPFProbe) already
+			// applies this inversion; cleanup must match it.
+			if podIngressCleanup {
+				log.Infof("Trying to cleanup pod ingress (host egress hook) on %s", linkName)
+				err = m.TCEgressDetach(linkName)
 				if err != nil {
 					if err.Error() == FILTER_CLEANUP_FAILED {
-						log.Errorf("failed to detach ingress, might not be present so moving on")
+						log.Errorf("failed to detach pod ingress, might not be present so moving on")
 					}
 				}
 			}
 
-			if egressCleanup {
-				log.Infof("Trying to cleanup egress on %s", linkName)
-				err = m.TCEgressDetach(linkName)
+			if podEgressCleanup {
+				log.Infof("Trying to cleanup pod egress (host ingress hook) on %s", linkName)
+				err = m.TCIngressDetach(linkName)
 				if err != nil {
 					if err.Error() == FILTER_CLEANUP_FAILED {
-						log.Errorf("failed to detach egress, might not be present so moving on")
+						log.Errorf("failed to detach pod egress, might not be present so moving on")
 					}
 				}
 			}

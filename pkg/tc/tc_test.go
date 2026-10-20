@@ -261,6 +261,94 @@ func TestQdiscCleanup(t *testing.T) {
 	}
 }
 
+// countFiltersAtHook returns the number of BPF filters installed on the given
+// host-perspective TC hook (netlink.HANDLE_MIN_INGRESS or HANDLE_MIN_EGRESS)
+// that carry the SDK's default filter handle.
+func countFiltersAtHook(t *testing.T, interfaceName string, filterParent uint32) int {
+	intf, err := netlink.LinkByName(interfaceName)
+	assert.NoError(t, err)
+
+	filters, err := netlink.FilterList(intf, filterParent)
+	assert.NoError(t, err)
+
+	count := 0
+	for _, filter := range filters {
+		if filter.Attrs().Handle == uint32(constdef.DEFAULT_BPF_FILTER_HANDLE) {
+			count++
+		}
+	}
+	return count
+}
+
+// TestQdiscCleanupDirection verifies that CleanupQdiscs detaches the correct
+// host-perspective TC hook for a given pod direction. TC hooks are named from
+// the host's perspective, so a pod-ingress program lives on the host tc-egress
+// hook and a pod-egress program lives on the host tc-ingress hook.
+//
+// After CleanupQdiscs(podIngressCleanup=true, podEgressCleanup=false), the
+// tc-egress hook (pod ingress) must be empty while the tc-ingress hook (pod
+// egress) must still hold its filter. The pre-fix implementation detached the
+// wrong hook, so this asserts the direction, not merely the absence of errors.
+func TestQdiscCleanupDirection(t *testing.T) {
+
+	if os.Getuid() != 0 {
+		t.Skip("Test requires root privileges.")
+	}
+
+	m := setup(t, "../../test-data/tc.bpf.elf", []string{"eni", "vlan"})
+	defer m.ctrl.Finish()
+
+	interfaceName := "eni1"
+
+	var interfaceNames []string
+	interfaceNames = append(interfaceNames, interfaceName)
+
+	setupTest(interfaceNames, t)
+	defer teardownTest(interfaceNames, t)
+
+	m.ebpf_maps.EXPECT().CreateBPFMap(gomock.Any()).AnyTimes()
+	m.ebpf_progs.EXPECT().LoadProg(gomock.Any()).AnyTimes()
+	m.ebpf_maps.EXPECT().PinMap(gomock.Any(), gomock.Any()).AnyTimes()
+	m.ebpf_maps.EXPECT().GetMapFromPinPath(gomock.Any()).AnyTimes()
+	m.ebpf_progs.EXPECT().GetProgFromPinPath(gomock.Any()).AnyTimes()
+	m.ebpf_progs.EXPECT().GetBPFProgAssociatedMapsIDs(gomock.Any()).AnyTimes()
+
+	bpfSDKclient := elfparser.New(elfparser.Config{})
+	progInfo, _, err := bpfSDKclient.LoadBpfFile(m.path, DUMMY_PROG_NAME)
+	if err != nil {
+		assert.NoError(t, err)
+	}
+	pinPath := constdef.PROG_BPF_FS + DUMMY_PROG_NAME + "_handle_ingress"
+	progFD := progInfo[pinPath].Program.ProgFD
+
+	// Pod ingress program -> host tc-egress hook (HANDLE_MIN_EGRESS).
+	if err := m.tcClient.TCEgressAttach(interfaceName, progFD, DUMMY_PROG_NAME); err != nil {
+		assert.NoError(t, err)
+	}
+	// Pod egress program -> host tc-ingress hook (HANDLE_MIN_INGRESS).
+	if err := m.tcClient.TCIngressAttach(interfaceName, progFD, DUMMY_PROG_NAME); err != nil {
+		assert.NoError(t, err)
+	}
+
+	// Both hooks should hold a filter before cleanup.
+	assert.Equal(t, 1, countFiltersAtHook(t, interfaceName, uint32(netlink.HANDLE_MIN_EGRESS)),
+		"tc-egress hook (pod ingress) should hold a filter before cleanup")
+	assert.Equal(t, 1, countFiltersAtHook(t, interfaceName, uint32(netlink.HANDLE_MIN_INGRESS)),
+		"tc-ingress hook (pod egress) should hold a filter before cleanup")
+
+	// Clean up pod ingress only.
+	if err := m.tcClient.CleanupQdiscs(true, false); err != nil {
+		assert.NoError(t, err)
+	}
+
+	// Pod ingress lives on the tc-egress hook -> must now be empty.
+	assert.Equal(t, 0, countFiltersAtHook(t, interfaceName, uint32(netlink.HANDLE_MIN_EGRESS)),
+		"tc-egress hook (pod ingress) should be empty after CleanupQdiscs(true, false)")
+	// Pod egress lives on the tc-ingress hook -> must still hold its filter.
+	assert.Equal(t, 1, countFiltersAtHook(t, interfaceName, uint32(netlink.HANDLE_MIN_INGRESS)),
+		"tc-ingress hook (pod egress) should still hold its filter after CleanupQdiscs(true, false)")
+}
+
 func TestNetLinkAPIs(t *testing.T) {
 
 	netLinktests := []struct {
