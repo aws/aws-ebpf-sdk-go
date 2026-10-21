@@ -32,7 +32,7 @@ var log = logger.Get()
 // errKernelBTFUnsupported means the kernel can't report kernel BTF through
 // bpf(). bpf_btf_info gained name and kernel_btf in 5.11, and older kernels
 // reject the larger struct with E2BIG.
-var errKernelBTFUnsupported = errors.New("kernel BTF not readable via bpf(); kfuncs need kernel 5.13+")
+var errKernelBTFUnsupported = errors.New("kernel BTF info unreadable (kernel older than 5.11); kfuncs unavailable")
 
 // Kfunc is a kernel function resolved against the running kernel's BTF.
 type Kfunc struct {
