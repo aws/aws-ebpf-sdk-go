@@ -29,6 +29,11 @@ import (
 
 var log = logger.Get()
 
+// errKernelBTFUnsupported means the kernel can't report kernel BTF through
+// bpf(). bpf_btf_info gained name and kernel_btf in 5.11, and older kernels
+// reject the larger struct with E2BIG.
+var errKernelBTFUnsupported = errors.New("kernel BTF info unreadable (kernel older than 5.11); kfuncs unavailable")
+
 // Kfunc is a kernel function resolved against the running kernel's BTF.
 type Kfunc struct {
 	// BTFID is the BTF_KIND_FUNC type ID, which goes in the call insn's imm.
@@ -245,6 +250,9 @@ func loadKernelBTF() ([]kernelBTF, error) {
 		if err != nil {
 			unix.Close(fd)
 			closeAll(objs)
+			if errors.Is(err, unix.E2BIG) {
+				return nil, errKernelBTFUnsupported
+			}
 			return nil, fmt.Errorf("read BTF ID %d: %w", id, err)
 		}
 		// The ID space also holds BTF that BPF programs loaded; only kernel
