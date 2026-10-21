@@ -24,6 +24,7 @@ import (
 
 	constdef "github.com/aws/aws-ebpf-sdk-go/pkg/constants"
 	"github.com/aws/aws-ebpf-sdk-go/pkg/logger"
+	"github.com/aws/aws-ebpf-sdk-go/pkg/metrics"
 	"github.com/aws/aws-ebpf-sdk-go/pkg/utils"
 	"golang.org/x/sys/unix"
 )
@@ -285,6 +286,38 @@ func (m *BpfMap) UnPinMap(pinPath string) error {
 	return unix.Close(int(fd))
 }
 
+// maxMapMutateAttempts bounds how many times a map mutation is retried on
+// ENOMEM.
+const maxMapMutateAttempts = 4
+
+// mutateWithRetry runs a map mutation syscall, retrying on ENOMEM.
+//
+// Since kernel 6.13 LPM trie and NO_PREALLOC hash elements come from the BPF
+// memory allocator, whose per-CPU free list is seeded with a single object when
+// unit_size > 256 and is refilled only by an async self-IPI. unit_alloc() has
+// no direct-allocation fallback, so an insert needing two objects can return
+// ENOMEM with memory free. The refill lands before the errno reaches userspace,
+// so an immediate retry succeeds. A saturated map returns ENOSPC, not ENOMEM,
+// so this cannot spin on a full map.
+//
+// See amazonlinux/amazon-linux-2023#1129 and aws/aws-network-policy-agent#686.
+func mutateWithRetry(op string, mutate func() (uintptr, unix.Errno)) (uintptr, unix.Errno) {
+	var ret uintptr
+	var errno unix.Errno
+	for attempt := 1; ; attempt++ {
+		ret, errno = mutate()
+		if errno != unix.ENOMEM {
+			return ret, errno
+		}
+		if attempt == maxMapMutateAttempts {
+			metrics.RecordMapMutateENOMEMExhausted()
+			return ret, errno
+		}
+		metrics.RecordMapMutateENOMEMRetry()
+		log.Infof("%s returned ENOMEM (attempt %d/%d), retrying", op, attempt, maxMapMutateAttempts)
+	}
+}
+
 func (m *BpfMap) CreateMapEntry(key, value uintptr) error {
 	return m.CreateUpdateMapEntry(key, value, uint64(constdef.BPF_NOEXIST))
 }
@@ -302,14 +335,17 @@ func (m *BpfMap) CreateUpdateMapEntry(key, value uintptr, updateFlags uint64) er
 		Key:   uint64(key),
 		Value: uint64(value),
 	}
-	ret, _, errno := unix.Syscall(
-		unix.SYS_BPF,
-		uintptr(constdef.BPF_MAP_UPDATE_ELEM),
-		uintptr(unsafe.Pointer(&attr)),
-		unsafe.Sizeof(attr),
-	)
-	runtime.KeepAlive(key)
-	runtime.KeepAlive(value)
+	ret, errno := mutateWithRetry("BPF_MAP_UPDATE_ELEM", func() (uintptr, unix.Errno) {
+		ret, _, errno := unix.Syscall(
+			unix.SYS_BPF,
+			uintptr(constdef.BPF_MAP_UPDATE_ELEM),
+			uintptr(unsafe.Pointer(&attr)),
+			unsafe.Sizeof(attr),
+		)
+		runtime.KeepAlive(key)
+		runtime.KeepAlive(value)
+		return ret, errno
+	})
 
 	if updateFlags == uint64(constdef.BPF_NOEXIST) && errno == unix.EEXIST {
 		log.Infof("map entry already exists, cannot create duplicate")
@@ -318,7 +354,8 @@ func (m *BpfMap) CreateUpdateMapEntry(key, value uintptr, updateFlags uint64) er
 
 	if errno != 0 {
 		log.Errorf("unable to create/update map entry and ret %d and err %s", int(ret), errno)
-		return fmt.Errorf("unable to update map: %s", errno)
+		// %w so callers can classify with errors.Is
+		return fmt.Errorf("unable to update map: %w", errno)
 	}
 
 	log.Debugf("Create/Update map entry done with ret : %d", int(ret))
@@ -332,15 +369,19 @@ func (m *BpfMap) DeleteMapEntry(key uintptr) error {
 		MapFD: uint32(mapFD),
 		Key:   uint64(key),
 	}
-	ret, _, errno := unix.Syscall(
-		unix.SYS_BPF,
-		uintptr(constdef.BPF_MAP_DELETE_ELEM),
-		uintptr(unsafe.Pointer(&attr)),
-		unsafe.Sizeof(attr),
-	)
+	ret, errno := mutateWithRetry("BPF_MAP_DELETE_ELEM", func() (uintptr, unix.Errno) {
+		ret, _, errno := unix.Syscall(
+			unix.SYS_BPF,
+			uintptr(constdef.BPF_MAP_DELETE_ELEM),
+			uintptr(unsafe.Pointer(&attr)),
+			unsafe.Sizeof(attr),
+		)
+		runtime.KeepAlive(key)
+		return ret, errno
+	})
 	if errno != 0 {
 		log.Errorf("unable to delete map entry and ret %d and err %s", int(ret), errno)
-		return fmt.Errorf("unable to update map: %s", errno)
+		return fmt.Errorf("unable to delete map entry: %w", errno)
 	}
 
 	log.Debugf("Delete map entry done with ret : %d", int(ret))
