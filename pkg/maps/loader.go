@@ -349,6 +349,9 @@ func (m *BpfMap) DeleteMapEntry(key uintptr) error {
 
 // UpdateProgArrayEntry writes progFD into the prog array at the given index.
 func (m *BpfMap) UpdateProgArrayEntry(index uint32, progFD int) error {
+	if m.MapMetaData.Type != constdef.BPF_MAP_TYPE_PROG_ARRAY.Index() {
+		return fmt.Errorf("UpdateProgArrayEntry: map %q is type %d, not BPF_MAP_TYPE_PROG_ARRAY", m.MapMetaData.Name, m.MapMetaData.Type)
+	}
 	if progFD < 0 {
 		return fmt.Errorf("UpdateProgArrayEntry: invalid program FD %d", progFD)
 	}
@@ -368,6 +371,9 @@ func (m *BpfMap) UpdateProgArrayEntry(index uint32, progFD int) error {
 
 // DeleteProgArrayEntry removes the prog array entry at the given index.
 func (m *BpfMap) DeleteProgArrayEntry(index uint32) error {
+	if m.MapMetaData.Type != constdef.BPF_MAP_TYPE_PROG_ARRAY.Index() {
+		return fmt.Errorf("DeleteProgArrayEntry: map %q is type %d, not BPF_MAP_TYPE_PROG_ARRAY", m.MapMetaData.Name, m.MapMetaData.Type)
+	}
 	key := new(uint32)
 	*key = index
 	err := m.DeleteMapEntry(uintptr(unsafe.Pointer(key)))
