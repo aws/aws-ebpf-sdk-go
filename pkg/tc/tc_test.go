@@ -349,6 +349,74 @@ func TestQdiscCleanupDirection(t *testing.T) {
 		"tc-ingress hook (pod egress) should still hold its filter after CleanupQdiscs(true, false)")
 }
 
+// TestGetAllAttachedProgIdsDirection verifies that GetAllAttachedProgIds reports
+// each pod direction from the host hook its program is actually attached to.
+// A pod-ingress program lives on the host tc-egress hook and a pod-egress
+// program lives on the host tc-ingress hook, so the first returned map
+// (pod ingress) must reflect what TCEgressAttach attached and the second
+// (pod egress) must reflect what TCIngressAttach attached.
+//
+// eni1 gets only a pod-ingress program (host egress hook); eni2 gets only a
+// pod-egress program (host ingress hook). The returned maps must not be swapped.
+func TestGetAllAttachedProgIdsDirection(t *testing.T) {
+
+	if os.Getuid() != 0 {
+		t.Skip("Test requires root privileges.")
+	}
+
+	m := setup(t, "../../test-data/tc.bpf.elf", []string{"eni", "vlan"})
+	defer m.ctrl.Finish()
+
+	podIngressIface := "eni1"
+	podEgressIface := "eni2"
+
+	interfaceNames := []string{podIngressIface, podEgressIface}
+
+	setupTest(interfaceNames, t)
+	defer teardownTest(interfaceNames, t)
+
+	m.ebpf_maps.EXPECT().CreateBPFMap(gomock.Any()).AnyTimes()
+	m.ebpf_progs.EXPECT().LoadProg(gomock.Any()).AnyTimes()
+	m.ebpf_maps.EXPECT().PinMap(gomock.Any(), gomock.Any()).AnyTimes()
+	m.ebpf_maps.EXPECT().GetMapFromPinPath(gomock.Any()).AnyTimes()
+	m.ebpf_progs.EXPECT().GetProgFromPinPath(gomock.Any()).AnyTimes()
+	m.ebpf_progs.EXPECT().GetBPFProgAssociatedMapsIDs(gomock.Any()).AnyTimes()
+
+	bpfSDKclient := elfparser.New(elfparser.Config{})
+	progInfo, _, err := bpfSDKclient.LoadBpfFile(m.path, DUMMY_PROG_NAME)
+	if err != nil {
+		assert.NoError(t, err)
+	}
+	pinPath := constdef.PROG_BPF_FS + DUMMY_PROG_NAME + "_handle_ingress"
+	progFD := progInfo[pinPath].Program.ProgFD
+
+	// Pod ingress program on eni1 -> host tc-egress hook.
+	if err := m.tcClient.TCEgressAttach(podIngressIface, progFD, DUMMY_PROG_NAME); err != nil {
+		assert.NoError(t, err)
+	}
+	// Pod egress program on eni2 -> host tc-ingress hook.
+	if err := m.tcClient.TCIngressAttach(podEgressIface, progFD, DUMMY_PROG_NAME); err != nil {
+		assert.NoError(t, err)
+	}
+
+	podIngressProgIds, podEgressProgIds, err := m.tcClient.GetAllAttachedProgIds()
+	assert.NoError(t, err)
+
+	// eni1 (pod ingress on host egress hook) must appear in the pod-ingress map,
+	// not the pod-egress map.
+	_, inPodIngress := podIngressProgIds[podIngressIface]
+	_, inPodEgress := podEgressProgIds[podIngressIface]
+	assert.True(t, inPodIngress, "eni1 pod-ingress program should be reported in the pod-ingress map")
+	assert.False(t, inPodEgress, "eni1 pod-ingress program must not be reported in the pod-egress map")
+
+	// eni2 (pod egress on host ingress hook) must appear in the pod-egress map,
+	// not the pod-ingress map.
+	_, inPodEgress2 := podEgressProgIds[podEgressIface]
+	_, inPodIngress2 := podIngressProgIds[podEgressIface]
+	assert.True(t, inPodEgress2, "eni2 pod-egress program should be reported in the pod-egress map")
+	assert.False(t, inPodIngress2, "eni2 pod-egress program must not be reported in the pod-ingress map")
+}
+
 func TestNetLinkAPIs(t *testing.T) {
 
 	netLinktests := []struct {

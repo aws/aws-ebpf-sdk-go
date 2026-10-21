@@ -343,30 +343,36 @@ func (m *bpfTc) GetAllAttachedProgIds() (map[string]int, map[string]int, error) 
 		return nil, nil, err
 	}
 
-	interfaceToIngressProgId := make(map[string]int)
-	interfaceToEgressProgId := make(map[string]int)
+	interfaceToPodIngressProgId := make(map[string]int)
+	interfaceToPodEgressProgId := make(map[string]int)
 	for _, link := range linkList {
 		linkName := link.Attrs().Name
 		log.Infof("link name %s", linkName)
-		ingressProgId := 0
-		egressProgId := 0
+		podIngressProgId := 0
+		podEgressProgId := 0
 		if err := mismatchedInterfacePrefix(linkName, m.InterfacePrefix); err == nil {
-			// Get ingress ID attached
-			filterParent := uint32(netlink.HANDLE_MIN_INGRESS)
-			ingressProgId = m.getAttachedProgId(link, filterParent)
-			log.Infof("Got ingress progId %d", ingressProgId)
-			if ingressProgId > 0 {
-				interfaceToIngressProgId[linkName] = ingressProgId
+			// TC hooks are named from the host's perspective, so pod direction
+			// inverts: a pod-ingress program lives on the host tc-egress hook,
+			// and a pod-egress program lives on the host tc-ingress hook. Read
+			// each pod direction from the hook its program is actually attached
+			// to, matching the attach/detach paths.
+
+			// Pod ingress program lives on the host tc-egress hook.
+			filterParent := uint32(netlink.HANDLE_MIN_EGRESS)
+			podIngressProgId = m.getAttachedProgId(link, filterParent)
+			log.Infof("Got pod ingress progId %d (host egress hook)", podIngressProgId)
+			if podIngressProgId > 0 {
+				interfaceToPodIngressProgId[linkName] = podIngressProgId
 			}
 
-			// Get egress ID attached
-			filterParent = uint32(netlink.HANDLE_MIN_EGRESS)
-			egressProgId = m.getAttachedProgId(link, filterParent)
-			log.Infof("Got egress progId %d", egressProgId)
-			if egressProgId > 0 {
-				interfaceToEgressProgId[linkName] = egressProgId
+			// Pod egress program lives on the host tc-ingress hook.
+			filterParent = uint32(netlink.HANDLE_MIN_INGRESS)
+			podEgressProgId = m.getAttachedProgId(link, filterParent)
+			log.Infof("Got pod egress progId %d (host ingress hook)", podEgressProgId)
+			if podEgressProgId > 0 {
+				interfaceToPodEgressProgId[linkName] = podEgressProgId
 			}
 		}
 	}
-	return interfaceToIngressProgId, interfaceToEgressProgId, nil
+	return interfaceToPodIngressProgId, interfaceToPodEgressProgId, nil
 }
