@@ -142,13 +142,12 @@ func TestMapOpsWrapErrno(t *testing.T) {
 
 // A transient ENOMEM must be absorbed inside the real method, not just inside
 // the retry helper.
-func TestMapMutationsAbsorbTransientENOMEM(t *testing.T) {
+func TestMapUpdateAbsorbsTransientENOMEM(t *testing.T) {
 	for _, tt := range []struct {
 		name string
 		call func(m *BpfMap, k, v uintptr) error
 	}{
 		{"CreateUpdateMapEntry", func(m *BpfMap, k, v uintptr) error { return m.UpdateMapEntry(k, v) }},
-		{"DeleteMapEntry", func(m *BpfMap, k, _ uintptr) error { return m.DeleteMapEntry(k) }},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			retriesBefore := metrics.MapMutateENOMEMRetries()
@@ -172,13 +171,12 @@ func TestMapMutationsAbsorbTransientENOMEM(t *testing.T) {
 // A persistent ENOMEM must stop after exactly maxMapMutateAttempts attempts and
 // surface to the caller. The attempt count is asserted as a literal so a change
 // to the constant is caught here.
-func TestMapMutationsStopAfterFourAttempts(t *testing.T) {
+func TestMapUpdateStopsAfterFourAttempts(t *testing.T) {
 	for _, tt := range []struct {
 		name string
 		call func(m *BpfMap, k, v uintptr) error
 	}{
 		{"CreateUpdateMapEntry", func(m *BpfMap, k, v uintptr) error { return m.UpdateMapEntry(k, v) }},
-		{"DeleteMapEntry", func(m *BpfMap, k, _ uintptr) error { return m.DeleteMapEntry(k) }},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			retriesBefore := metrics.MapMutateENOMEMRetries()
@@ -200,7 +198,7 @@ func TestMapMutationsStopAfterFourAttempts(t *testing.T) {
 // Errnos that do not clear on their own must be returned on the first attempt
 // and must not touch the exhaustion counter, which exists to flag real
 // enforcement gaps.
-func TestMapMutationsDoNotRetryOtherErrnos(t *testing.T) {
+func TestMapUpdateDoesNotRetryOtherErrnos(t *testing.T) {
 	for _, errno := range []unix.Errno{unix.ENOSPC, unix.E2BIG, unix.EINVAL, unix.EBADF, unix.EPERM} {
 		t.Run(unix.ErrnoName(errno), func(t *testing.T) {
 			retriesBefore := metrics.MapMutateENOMEMRetries()
@@ -218,6 +216,24 @@ func TestMapMutationsDoNotRetryOtherErrnos(t *testing.T) {
 				"a permanent errno is not an exhausted retry")
 		})
 	}
+}
+
+// Deletes are deliberately NOT retried: trie_delete_elem and
+// htab_map_delete_elem never allocate, so a delete cannot hit the allocator
+// race. The only ENOMEM it can see is the key copy in map_delete_elem, which is
+// real memory pressure and will not clear within a few sleepless syscalls.
+func TestMapDeleteIsNotRetried(t *testing.T) {
+	retriesBefore := metrics.MapMutateENOMEMRetries()
+	exhaustedBefore := metrics.MapMutateENOMEMExhausted()
+
+	calls := scriptSyscall(t, unix.ENOMEM)
+	key := uint32(0)
+	err := (&BpfMap{MapFD: 1}).DeleteMapEntry(uintptr(unsafe.Pointer(&key)))
+
+	assert.ErrorIs(t, err, unix.ENOMEM)
+	assert.Equal(t, 1, *calls, "delete must not retry")
+	assert.Equal(t, retriesBefore, metrics.MapMutateENOMEMRetries())
+	assert.Equal(t, exhaustedBefore, metrics.MapMutateENOMEMExhausted())
 }
 
 // BPF_NOEXIST + EEXIST is reported as success, and that must survive the retry

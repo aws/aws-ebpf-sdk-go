@@ -286,8 +286,8 @@ func (m *BpfMap) UnPinMap(pinPath string) error {
 	return unix.Close(int(fd))
 }
 
-// maxMapMutateAttempts bounds how many times a map mutation is retried on
-// ENOMEM.
+// maxMapMutateAttempts bounds the TOTAL attempts at a map update: the initial
+// call plus at most maxMapMutateAttempts-1 retries.
 const maxMapMutateAttempts = 4
 
 // bpfMutateSyscall issues bpf(2) for a map mutation. It is a variable so a test
@@ -298,15 +298,27 @@ var bpfMutateSyscall = func(cmd uintptr, attr unsafe.Pointer, size uintptr) (uin
 	return ret, errno
 }
 
-// mutateWithRetry runs a map mutation syscall, retrying on ENOMEM.
+// mutateWithRetry runs a map update syscall, retrying on ENOMEM.
 //
-// Since kernel 6.13 LPM trie and NO_PREALLOC hash elements come from the BPF
-// memory allocator, whose per-CPU free list is seeded with a single object when
-// unit_size > 256 and is refilled only by an async self-IPI. unit_alloc() has
-// no direct-allocation fallback, so an insert needing two objects can return
-// ENOMEM with memory free. The refill lands before the errno reaches userspace,
-// so an immediate retry succeeds. A saturated map returns ENOSPC, not ENOMEM,
-// so this cannot spin on a full map.
+// NO_PREALLOC hash elements (since v6.1) and LPM trie nodes (since v6.13,
+// commit 3d8dc43eb2a3) come from the BPF memory allocator. Its per-CPU free list
+// holds a single object when unit_size > 256 and is refilled by an irq_work
+// raised on the allocating CPU. unit_alloc() has no direct-allocation fallback,
+// so an insert needing two objects -- a leaf plus a new branch point -- can
+// return ENOMEM with memory free.
+//
+// The refill is asynchronous: #1129 measured the IPI landing ~715ns after it is
+// raised. An immediate retry therefore usually, but not always, finds a refilled
+// list, which is why this is a bounded retry and not a single one. It also relies
+// on staying on the CPU that raised the refill, since the irq_work runs only
+// there; back-to-back syscalls on one thread normally do. Introducing a sleep
+// between attempts would quietly break that and needs re-measuring first.
+//
+// A full map cannot spin here, because it reports a different errno: ENOSPC from
+// trie_update_elem for an LPM trie, E2BIG from alloc_htab_elem for a hash. The
+// one ENOMEM that is not this race is prealloc_lru_pop failing on an LRU hash,
+// which is genuine exhaustion; retries are bounded and sleepless, so that costs
+// at most three extra syscalls.
 //
 // See amazonlinux/amazon-linux-2023#1129 and aws/aws-network-policy-agent#686.
 func mutateWithRetry(op string, mutate func() (uintptr, unix.Errno)) (uintptr, unix.Errno) {
@@ -319,6 +331,7 @@ func mutateWithRetry(op string, mutate func() (uintptr, unix.Errno)) (uintptr, u
 		}
 		if attempt == maxMapMutateAttempts {
 			metrics.RecordMapMutateENOMEMExhausted()
+			log.Errorf("%s still ENOMEM after %d attempts, giving up", op, maxMapMutateAttempts)
 			return ret, errno
 		}
 		metrics.RecordMapMutateENOMEMRetry()
@@ -344,14 +357,11 @@ func (m *BpfMap) CreateUpdateMapEntry(key, value uintptr, updateFlags uint64) er
 		Value: uint64(value),
 	}
 	ret, errno := mutateWithRetry("BPF_MAP_UPDATE_ELEM", func() (uintptr, unix.Errno) {
-		r, e := bpfMutateSyscall(
+		return bpfMutateSyscall(
 			uintptr(constdef.BPF_MAP_UPDATE_ELEM),
 			unsafe.Pointer(&attr),
 			unsafe.Sizeof(attr),
 		)
-		runtime.KeepAlive(key)
-		runtime.KeepAlive(value)
-		return r, e
 	})
 
 	if updateFlags == uint64(constdef.BPF_NOEXIST) && errno == unix.EEXIST {
@@ -376,15 +386,15 @@ func (m *BpfMap) DeleteMapEntry(key uintptr) error {
 		MapFD: uint32(mapFD),
 		Key:   uint64(key),
 	}
-	ret, errno := mutateWithRetry("BPF_MAP_DELETE_ELEM", func() (uintptr, unix.Errno) {
-		r, e := bpfMutateSyscall(
-			uintptr(constdef.BPF_MAP_DELETE_ELEM),
-			unsafe.Pointer(&attr),
-			unsafe.Sizeof(attr),
-		)
-		runtime.KeepAlive(key)
-		return r, e
-	})
+	// Not retried: trie_delete_elem and htab_map_delete_elem never allocate, so
+	// a delete cannot hit the allocator race above. The only ENOMEM it can see
+	// is the key copy in map_delete_elem (kvmemdup_bpfptr), which is real memory
+	// pressure and will not clear within a few sleepless syscalls.
+	ret, errno := bpfMutateSyscall(
+		uintptr(constdef.BPF_MAP_DELETE_ELEM),
+		unsafe.Pointer(&attr),
+		unsafe.Sizeof(attr),
+	)
 	if errno != 0 {
 		log.Errorf("unable to delete map entry and ret %d and err %s", int(ret), errno)
 		return fmt.Errorf("unable to delete map entry: %w", errno)
