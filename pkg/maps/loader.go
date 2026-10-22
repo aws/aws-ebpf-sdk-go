@@ -290,6 +290,14 @@ func (m *BpfMap) UnPinMap(pinPath string) error {
 // ENOMEM.
 const maxMapMutateAttempts = 4
 
+// bpfMutateSyscall issues bpf(2) for a map mutation. It is a variable so a test
+// can drive a scripted errno sequence through the real map methods rather than
+// through a stand-in.
+var bpfMutateSyscall = func(cmd uintptr, attr unsafe.Pointer, size uintptr) (uintptr, unix.Errno) {
+	ret, _, errno := unix.Syscall(unix.SYS_BPF, cmd, uintptr(attr), size)
+	return ret, errno
+}
+
 // mutateWithRetry runs a map mutation syscall, retrying on ENOMEM.
 //
 // Since kernel 6.13 LPM trie and NO_PREALLOC hash elements come from the BPF
@@ -336,15 +344,14 @@ func (m *BpfMap) CreateUpdateMapEntry(key, value uintptr, updateFlags uint64) er
 		Value: uint64(value),
 	}
 	ret, errno := mutateWithRetry("BPF_MAP_UPDATE_ELEM", func() (uintptr, unix.Errno) {
-		ret, _, errno := unix.Syscall(
-			unix.SYS_BPF,
+		r, e := bpfMutateSyscall(
 			uintptr(constdef.BPF_MAP_UPDATE_ELEM),
-			uintptr(unsafe.Pointer(&attr)),
+			unsafe.Pointer(&attr),
 			unsafe.Sizeof(attr),
 		)
 		runtime.KeepAlive(key)
 		runtime.KeepAlive(value)
-		return ret, errno
+		return r, e
 	})
 
 	if updateFlags == uint64(constdef.BPF_NOEXIST) && errno == unix.EEXIST {
@@ -370,14 +377,13 @@ func (m *BpfMap) DeleteMapEntry(key uintptr) error {
 		Key:   uint64(key),
 	}
 	ret, errno := mutateWithRetry("BPF_MAP_DELETE_ELEM", func() (uintptr, unix.Errno) {
-		ret, _, errno := unix.Syscall(
-			unix.SYS_BPF,
+		r, e := bpfMutateSyscall(
 			uintptr(constdef.BPF_MAP_DELETE_ELEM),
-			uintptr(unsafe.Pointer(&attr)),
+			unsafe.Pointer(&attr),
 			unsafe.Sizeof(attr),
 		)
 		runtime.KeepAlive(key)
-		return ret, errno
+		return r, e
 	})
 	if errno != 0 {
 		log.Errorf("unable to delete map entry and ret %d and err %s", int(ret), errno)
