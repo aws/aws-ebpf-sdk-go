@@ -1729,3 +1729,349 @@ func TestIsKfuncSymbol(t *testing.T) {
 		})
 	}
 }
+
+// recordReleases replaces releaseObject and returns the objects released. It
+// also drops the global maps the test's loads cache.
+func recordReleases(t *testing.T) *[]createdObject {
+	t.Helper()
+	t.Cleanup(func() {
+		sdkCache.Delete("aws_conntrack_map")
+		sdkCache.Delete("policy_events")
+		sdkCache.Delete("ingress_map")
+	})
+	var released []createdObject
+	orig := releaseObject
+	t.Cleanup(func() { releaseObject = orig })
+	releaseObject = func(obj createdObject) { released = append(released, obj) }
+	return &released
+}
+
+// TestLoadFailureReleasesCreatedObjects fails each step of a load of
+// tc.ingress.bpf.elf (3 maps, 3 programs) and checks the maps and programs
+// created before the failure are released. ingress_map is namespaced; the
+// global maps stay once they are cached.
+func TestLoadFailureReleasesCreatedObjects(t *testing.T) {
+	const ingressMapFD, conntrackMapFD, eventsMapFD = 101, 102, 103
+	mapPins := map[int]string{
+		ingressMapFD:   constdef.MAP_BPF_FS + "test_ingress_map",
+		conntrackMapFD: constdef.MAP_BPF_FS + "test_aws_conntrack_map",
+	}
+	mapFDs := map[string]uint32{"ingress_map": ingressMapFD, "aws_conntrack_map": conntrackMapFD, "policy_events": eventsMapFD}
+	errInjected := errors.New("injected")
+
+	tests := []struct {
+		name string
+		// failAt names the call that fails; n is which call of it (1-based).
+		failAt string
+		n      int
+		// wantMaps are the map FDs released; wantProgs is how many programs are.
+		wantMaps  []int
+		wantProgs int
+		// prefix and namespaced override the loader's pin prefix and classifier.
+		prefix     string
+		namespaced map[string]struct{}
+	}{
+		{name: "create ingress_map", failAt: "CreateBPFMap", n: 1},
+		{name: "get ingress_map from pin path", failAt: "GetMapFromPinPath", n: 1, wantMaps: []int{ingressMapFD}},
+		{name: "get global map from pin path", failAt: "GetMapFromPinPath", n: 2, wantMaps: []int{conntrackMapFD, ingressMapFD}},
+		{name: "create third map", failAt: "CreateBPFMap", n: 3, wantMaps: []int{ingressMapFD}},
+		{name: "load first program", failAt: "LoadProg", n: 1, wantMaps: []int{ingressMapFD}},
+		{name: "load third program", failAt: "LoadProg", n: 3, wantMaps: []int{ingressMapFD}, wantProgs: 2},
+		{name: "get program from pin path", failAt: "GetProgFromPinPath", n: 2, wantMaps: []int{ingressMapFD}, wantProgs: 2},
+		{name: "get associated map IDs", failAt: "GetBPFProgAssociatedMapsIDs", n: 1, wantMaps: []int{ingressMapFD}, wantProgs: 3},
+		{name: "pin prefix with underscore", failAt: "LoadProg", n: 1, wantMaps: []int{ingressMapFD}, prefix: "web_v2@ns"},
+		{name: "no namespaced maps configured", failAt: "LoadProg", n: 3, wantProgs: 2, namespaced: map[string]struct{}{}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := setup(t, "../../test-data/tc.ingress.bpf.elf")
+			defer m.ctrl.Finish()
+			released := recordReleases(t)
+			calls := map[string]int{}
+			fail := func(call string) bool {
+				calls[call]++
+				return call == tt.failAt && calls[call] == tt.n
+			}
+			nextProgFD := 200
+			m.ebpf_maps.EXPECT().CreateBPFMap(gomock.Any()).AnyTimes().DoAndReturn(func(in ebpf_maps.CreateEBPFMapInput) (ebpf_maps.BpfMap, error) {
+				if fail("CreateBPFMap") {
+					return ebpf_maps.BpfMap{}, errInjected
+				}
+				return ebpf_maps.BpfMap{MapFD: mapFDs[in.Name]}, nil
+			})
+			m.ebpf_maps.EXPECT().GetMapFromPinPath(gomock.Any()).AnyTimes().DoAndReturn(func(string) (ebpf_maps.BpfMapInfo, error) {
+				if fail("GetMapFromPinPath") {
+					return ebpf_maps.BpfMapInfo{}, errInjected
+				}
+				return ebpf_maps.BpfMapInfo{}, nil
+			})
+			m.ebpf_progs.EXPECT().LoadProg(gomock.Any()).AnyTimes().DoAndReturn(func(ebpf_progs.CreateEBPFProgInput) (int, error) {
+				if fail("LoadProg") {
+					return -1, errInjected
+				}
+				nextProgFD++
+				return nextProgFD, nil
+			})
+			m.ebpf_progs.EXPECT().GetProgFromPinPath(gomock.Any()).AnyTimes().DoAndReturn(func(string) (ebpf_progs.BpfProgInfo, int, error) {
+				if fail("GetProgFromPinPath") {
+					return ebpf_progs.BpfProgInfo{}, -1, errInjected
+				}
+				return ebpf_progs.BpfProgInfo{}, -1, nil
+			})
+			m.ebpf_progs.EXPECT().GetBPFProgAssociatedMapsIDs(gomock.Any()).AnyTimes().DoAndReturn(func(int) ([]uint32, error) {
+				if fail("GetBPFProgAssociatedMapsIDs") {
+					return nil, errInjected
+				}
+				return nil, nil
+			})
+
+			f, err := os.Open(m.path)
+			assert.NoError(t, err)
+			defer f.Close()
+			elfFile, err := elf.NewFile(f)
+			assert.NoError(t, err)
+			prefix, namespaced := "test", map[string]struct{}{"ingress_map": {}}
+			if tt.prefix != "" {
+				prefix = tt.prefix
+			}
+			if tt.namespaced != nil {
+				namespaced = tt.namespaced
+			}
+			loader := newElfLoader(elfFile, m.ebpf_maps, m.ebpf_progs, prefix, namespaced)
+
+			progs, maps, err := loader.doLoadELF(BpfCustomData{})
+			assert.Error(t, err)
+			assert.Nil(t, progs)
+			assert.Nil(t, maps)
+
+			var gotMaps []int
+			gotProgs := 0
+			for _, obj := range *released {
+				if obj.fd > 200 {
+					gotProgs++
+					assert.True(t, strings.HasPrefix(obj.pinPath, constdef.PROG_BPF_FS), "program pin path %s", obj.pinPath)
+					continue
+				}
+				gotMaps = append(gotMaps, obj.fd)
+				assert.Equal(t, strings.Replace(mapPins[obj.fd], "test_", prefix+"_", 1), obj.pinPath)
+			}
+			assert.Equal(t, tt.wantMaps, gotMaps)
+			assert.Equal(t, tt.wantProgs, gotProgs)
+			if tt.wantProgs > 0 && len(tt.wantMaps) > 0 {
+				assert.Equal(t, ingressMapFD, (*released)[len(*released)-1].fd, "maps are released after the programs that use them")
+			}
+		})
+	}
+}
+
+func TestLoadSuccessReleasesNothing(t *testing.T) {
+	m := setup(t, "../../test-data/tc.ingress.bpf.elf")
+	defer m.ctrl.Finish()
+	released := recordReleases(t)
+	m.ebpf_maps.EXPECT().CreateBPFMap(gomock.Any()).AnyTimes().Return(ebpf_maps.BpfMap{MapFD: 101}, nil)
+	m.ebpf_maps.EXPECT().GetMapFromPinPath(gomock.Any()).AnyTimes()
+	m.ebpf_progs.EXPECT().LoadProg(gomock.Any()).AnyTimes().Return(201, nil)
+	m.ebpf_progs.EXPECT().GetProgFromPinPath(gomock.Any()).AnyTimes().Return(ebpf_progs.BpfProgInfo{}, -1, nil)
+	m.ebpf_progs.EXPECT().GetBPFProgAssociatedMapsIDs(gomock.Any()).AnyTimes()
+
+	f, err := os.Open(m.path)
+	assert.NoError(t, err)
+	defer f.Close()
+	elfFile, err := elf.NewFile(f)
+	assert.NoError(t, err)
+	loader := newElfLoader(elfFile, m.ebpf_maps, m.ebpf_progs, "test", map[string]struct{}{"ingress_map": {}})
+
+	_, _, err = loader.doLoadELF(BpfCustomData{})
+	assert.NoError(t, err)
+	assert.Empty(t, *released)
+}
+
+// A map created with PIN_NONE was never pinned, so only its FD is released.
+func TestLoadFailureReleasesUnpinnedMapByFDOnly(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	released := recordReleases(t)
+	mockBpfMapAPI := mock_ebpf_maps.NewMockBpfMapAPIs(ctrl)
+	mockBpfMapAPI.EXPECT().CreateBPFMap(gomock.Any()).Return(ebpf_maps.BpfMap{MapFD: 10}, nil)
+	mockBpfMapAPI.EXPECT().GetBPFmapInfo(uint32(10)).Return(ebpf_maps.BpfMapInfo{}, errors.New("injected"))
+	loader := &elfLoader{
+		bpfMapApi:         mockBpfMapAPI,
+		customizedPinPath: "pod",
+		mapClassifier:     mapClassifier{namespacedMaps: map[string]struct{}{"test_map": {}}},
+	}
+
+	_, err := loader.loadMap([]ebpf_maps.CreateEBPFMapInput{{
+		Name:       "test_map",
+		PinOptions: &ebpf_maps.BpfMapPinOptions{Type: constdef.PIN_NONE.Index()},
+	}})
+	assert.Error(t, err)
+	loader.releaseCreated()
+	assert.Equal(t, []createdObject{{fd: 10}}, *released)
+}
+
+// A program load that fails after real maps were created leaves no pin or FD
+// for the namespaced map. The global maps stay cached and pinned.
+func TestLoadFailureReleasesRealKernelObjects(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("requires root to create maps in the kernel")
+	}
+	assert.NoError(t, utils.Mount_bpf_fs())
+	defer utils.Unmount_bpf_fs()
+
+	var releasedFDs []int
+	orig := releaseObject
+	t.Cleanup(func() { releaseObject = orig })
+	releaseObject = func(obj createdObject) {
+		releasedFDs = append(releasedFDs, obj.fd)
+		orig(obj)
+	}
+
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	mockBpfProgAPI := mock_ebpf_progs.NewMockBpfProgAPIs(ctrl)
+	mockBpfProgAPI.EXPECT().LoadProg(gomock.Any()).Return(-1, errors.New("injected"))
+
+	f, err := os.Open("../../test-data/tc.ingress.bpf.elf")
+	assert.NoError(t, err)
+	defer f.Close()
+	elfFile, err := elf.NewFile(f)
+	assert.NoError(t, err)
+	loader := newElfLoader(elfFile, &ebpf_maps.BpfMap{}, mockBpfProgAPI, "rk_release", map[string]struct{}{"ingress_map": {}})
+
+	_, _, err = loader.doLoadELF(BpfCustomData{})
+	assert.ErrorContains(t, err, "injected")
+
+	_, err = os.Stat(constdef.MAP_BPF_FS + "rk_release_ingress_map")
+	assert.True(t, os.IsNotExist(err), "namespaced map pin must be removed, got %v", err)
+	_, err = os.Stat(constdef.MAP_BPF_FS + "rk_release_aws_conntrack_map")
+	assert.NoError(t, err, "global map stays pinned")
+	if assert.Len(t, releasedFDs, 1) {
+		_, err = unix.FcntlInt(uintptr(releasedFDs[0]), unix.F_GETFD, 0)
+		assert.ErrorIs(t, err, unix.EBADF, "released map FD must be closed")
+	}
+}
+
+// A pin that another object replaced during the load is not unlinked by the
+// rollback; only this load's FD is closed.
+func TestLoadFailureKeepsReplacedPin(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("requires root to create maps in the kernel")
+	}
+	assert.NoError(t, utils.Mount_bpf_fs())
+	defer utils.Unmount_bpf_fs()
+	t.Cleanup(func() {
+		sdkCache.Delete("aws_conntrack_map")
+		sdkCache.Delete("policy_events")
+	})
+
+	pinPath := constdef.MAP_BPF_FS + "rk_replaced_ingress_map"
+	var foreign ebpf_maps.BpfMap
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	mockBpfProgAPI := mock_ebpf_progs.NewMockBpfProgAPIs(ctrl)
+	mockBpfProgAPI.EXPECT().LoadProg(gomock.Any()).DoAndReturn(func(ebpf_progs.CreateEBPFProgInput) (int, error) {
+		// Another load replaces the pin before this one fails.
+		var err error
+		foreign, err = (&ebpf_maps.BpfMap{}).CreateBPFMap(ebpf_maps.CreateEBPFMapInput{
+			Type: uint32(constdef.BPF_MAP_TYPE_HASH.Index()), KeySize: 4, ValueSize: 4, MaxEntries: 1,
+			PinOptions: &ebpf_maps.BpfMapPinOptions{Type: constdef.PIN_GLOBAL_NS.Index(), PinPath: pinPath},
+		})
+		assert.NoError(t, err)
+		return -1, errors.New("injected")
+	})
+
+	f, err := os.Open("../../test-data/tc.ingress.bpf.elf")
+	assert.NoError(t, err)
+	defer f.Close()
+	elfFile, err := elf.NewFile(f)
+	assert.NoError(t, err)
+	loader := newElfLoader(elfFile, &ebpf_maps.BpfMap{}, mockBpfProgAPI, "rk_replaced", map[string]struct{}{"ingress_map": {}})
+
+	_, _, err = loader.doLoadELF(BpfCustomData{})
+	assert.ErrorContains(t, err, "injected")
+
+	foreignInfo, err := ebpf_maps.GetBPFmapInfo(int(foreign.MapFD))
+	assert.NoError(t, err)
+	pinned, err := (&ebpf_maps.BpfMap{}).GetMapFromPinPath(pinPath)
+	if assert.NoError(t, err, "the replaced pin must survive the rollback") {
+		assert.Equal(t, foreignInfo.Id, pinned.Id)
+	}
+	assert.NoError(t, foreign.UnPinMap(pinPath))
+}
+
+// failLinkProgAPI loads programs for real and fails the map-ID lookup that
+// follows, after letting the test replace a pin.
+type failLinkProgAPI struct {
+	*ebpf_progs.BpfProgram
+	beforeFail func()
+}
+
+func (f failLinkProgAPI) GetBPFProgAssociatedMapsIDs(int) ([]uint32, error) {
+	f.beforeFail()
+	return nil, errors.New("injected")
+}
+
+// Programs a failed load pinned are unpinned, except a pin another program
+// replaced during the load.
+func TestLoadFailureReleasesRealKernelPrograms(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("requires root to load programs into the kernel")
+	}
+	assert.NoError(t, utils.Mount_bpf_fs())
+	defer utils.Unmount_bpf_fs()
+	t.Cleanup(func() {
+		sdkCache.Delete("aws_conntrack_map")
+		sdkCache.Delete("policy_events")
+	})
+
+	listPins := func() []string {
+		var pins []string
+		entries, _ := os.ReadDir(constdef.PROG_BPF_FS)
+		for _, e := range entries {
+			if strings.HasPrefix(e.Name(), "rk_progfail") {
+				pins = append(pins, constdef.PROG_BPF_FS+e.Name())
+			}
+		}
+		return pins
+	}
+	var replacedPin string
+	var foreignID uint32
+	progAPI := failLinkProgAPI{BpfProgram: &ebpf_progs.BpfProgram{}, beforeFail: func() {
+		pins := listPins()
+		if !assert.NotEmpty(t, pins) {
+			return
+		}
+		// Another load replaces one program pin: mov r0, 0; exit.
+		replacedPin = pins[0]
+		fd, err := (&ebpf_progs.BpfProgram{}).LoadProg(ebpf_progs.CreateEBPFProgInput{
+			ProgType:   "tc_cls",
+			ProgData:   []byte{0xb7, 0, 0, 0, 0, 0, 0, 0, 0x95, 0, 0, 0, 0, 0, 0, 0},
+			LicenseStr: "GPL",
+			PinPath:    replacedPin,
+			InsDefSize: 8,
+		})
+		if assert.NoError(t, err) {
+			info, err := ebpf_progs.GetBPFprogInfo(fd)
+			assert.NoError(t, err)
+			foreignID = info.ID
+			unix.Close(fd)
+		}
+	}}
+
+	f, err := os.Open("../../test-data/tc.ingress.bpf.elf")
+	assert.NoError(t, err)
+	defer f.Close()
+	elfFile, err := elf.NewFile(f)
+	assert.NoError(t, err)
+	loader := newElfLoader(elfFile, &ebpf_maps.BpfMap{}, progAPI, "rk_progfail", map[string]struct{}{"ingress_map": {}})
+
+	_, _, err = loader.doLoadELF(BpfCustomData{})
+	assert.ErrorContains(t, err, "associatedmapIDs failed")
+	assert.Equal(t, []string{replacedPin}, listPins(), "only the replaced pin survives")
+	pinned, fd, err := (&ebpf_progs.BpfProgram{}).GetProgFromPinPath(replacedPin)
+	if assert.NoError(t, err) {
+		assert.Equal(t, foreignID, pinned.ID)
+		unix.Close(fd)
+	}
+	assert.NoError(t, utils.UnPinObject(replacedPin))
+}

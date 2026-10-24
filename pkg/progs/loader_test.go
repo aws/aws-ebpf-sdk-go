@@ -15,6 +15,8 @@
 package progs
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"testing"
@@ -164,4 +166,32 @@ func TestProgLoadAttrLayout(t *testing.T) {
 	assert.Equal(t, uintptr(112), unsafe.Offsetof(attr.attachProgFD))
 	assert.Equal(t, uintptr(120), unsafe.Offsetof(attr.fdArray))
 	assert.Equal(t, uintptr(128), unsafe.Sizeof(attr))
+}
+
+// LoadProg closes the program FD when pinning fails.
+func TestLoadProgClosesFDWhenPinFails(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("requires root to load programs into the kernel")
+	}
+	notADir := filepath.Join(t.TempDir(), "file")
+	assert.NoError(t, os.WriteFile(notADir, nil, 0600))
+	// mov r0, 0; exit
+	insns := []byte{0xb7, 0, 0, 0, 0, 0, 0, 0, 0x95, 0, 0, 0, 0, 0, 0, 0}
+	countFDs := func() int {
+		entries, err := os.ReadDir("/proc/self/fd")
+		assert.NoError(t, err)
+		return len(entries)
+	}
+
+	before := countFDs()
+	fd, err := (&BpfProgram{}).LoadProg(CreateEBPFProgInput{
+		ProgType:   "tc_cls",
+		ProgData:   insns,
+		LicenseStr: "GPL",
+		PinPath:    filepath.Join(notADir, "prog"),
+		InsDefSize: 8,
+	})
+	assert.Error(t, err)
+	assert.Equal(t, -1, fd)
+	assert.Equal(t, before, countFDs())
 }

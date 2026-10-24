@@ -138,6 +138,10 @@ type elfLoader struct {
 	fdArray      []int32
 	fdArrayIndex map[int]int16
 	fdArrayProgs map[uint32]struct{}
+
+	// created holds the maps and programs this load created, so a failed load
+	// can release them. Global maps leave it once they are added to sdkCache.
+	created []createdObject
 }
 
 func New(cfg Config) BpfSDKClient {
@@ -228,6 +232,65 @@ func (b *bpfSDKClient) LoadBpfFileWithCustomData(inputData BpfCustomData) (map[s
 	return bpfLoadedProg, bpfLoadedMaps, nil
 }
 
+type createdObject struct {
+	fd      int
+	pinPath string
+	isProg  bool
+}
+
+// releaseObject closes an object a failed load created, and unpins it if the
+// pin still holds that object. Overridden in tests.
+var releaseObject = func(obj createdObject) {
+	if obj.pinPath != "" {
+		if pinHoldsObject(obj) {
+			if err := utils.UnPinObject(obj.pinPath); err != nil {
+				log.Errorf("failed to unpin %s: %v", obj.pinPath, err)
+			}
+		} else {
+			log.Infof("keeping %s: pin does not hold fd %d", obj.pinPath, obj.fd)
+		}
+	}
+	if obj.fd > 0 {
+		unix.Close(obj.fd)
+	}
+}
+
+// pinHoldsObject reports whether obj.pinPath refers to the object behind obj.fd.
+// It may not if pinning was skipped or failed, or if another load replaced the
+// pin. The check and the unpin are not atomic, so loads of the same pin path
+// must be serialized by the caller.
+func pinHoldsObject(obj createdObject) bool {
+	if obj.isProg {
+		ours, err := ebpf_progs.GetBPFprogInfo(obj.fd)
+		if err != nil {
+			return false
+		}
+		pinned, pinnedFD, err := (&ebpf_progs.BpfProgram{}).GetProgFromPinPath(obj.pinPath)
+		if err != nil {
+			return false
+		}
+		unix.Close(pinnedFD)
+		return pinned.ID == ours.ID
+	}
+	ours, err := ebpf_maps.GetBPFmapInfo(obj.fd)
+	if err != nil {
+		return false
+	}
+	pinned, err := (&ebpf_maps.BpfMap{}).GetMapFromPinPath(obj.pinPath)
+	if err != nil {
+		return false
+	}
+	return pinned.Id == ours.Id
+}
+
+// releaseCreated releases what this load created, newest first.
+func (e *elfLoader) releaseCreated() {
+	for i := len(e.created) - 1; i >= 0; i-- {
+		releaseObject(e.created[i])
+	}
+	e.created = nil
+}
+
 func (e *elfLoader) loadMap(parsedMapData []ebpf_maps.CreateEBPFMapInput) (map[string]ebpf_maps.BpfMap, error) {
 
 	programmedMaps := make(map[string]ebpf_maps.BpfMap)
@@ -251,6 +314,11 @@ func (e *elfLoader) loadMap(parsedMapData []ebpf_maps.CreateEBPFMapInput) (map[s
 			log.Errorf("failed to create map %v", err)
 			return nil, err
 		}
+		obj := createdObject{fd: int(bpfMap.MapFD)}
+		if loadedMaps.PinOptions.Type != constdef.PIN_NONE.Index() {
+			obj.pinPath = pinPath
+		}
+		e.created = append(e.created, obj)
 
 		//Fill ID
 		if loadedMaps.PinOptions.Type == constdef.PIN_NONE.Index() {
@@ -270,10 +338,14 @@ func (e *elfLoader) loadMap(parsedMapData []ebpf_maps.CreateEBPFMapInput) (map[s
 
 		programmedMaps[loadedMaps.Name] = bpfMap
 
-		if e.IsMapGlobal(pinPath) {
+		// Classify by map name: pinPath can't be split reliably when the
+		// pin prefix contains '_'.
+		if !e.isNamespacedMap(loadedMaps.Name) {
 			//Add to global cache
 			sdkCache.Set(loadedMaps.Name, int(bpfMap.MapFD))
 			log.Infof("Added map Name %s and FD %d to SDK cache", loadedMaps.Name, bpfMap.MapFD)
+			// Cached maps are shared with later loads, so a failed load keeps them.
+			e.created = e.created[:len(e.created)-1]
 		}
 	}
 	return programmedMaps, nil
@@ -347,6 +419,7 @@ func (e *elfLoader) loadProg(loadedProgData map[string]ebpf_progs.CreateEBPFProg
 			return nil, fmt.Errorf("failed to Load the prog: %w", errno)
 		}
 		log.Infof("loaded prog with %d", progFD)
+		e.created = append(e.created, createdObject{fd: progFD, pinPath: pgmInput.PinPath, isProg: true})
 
 		//Fill ID
 		progInfo, newProgFD, err := e.bpfProgApi.GetProgFromPinPath(pgmInput.PinPath)
@@ -1076,8 +1149,12 @@ func (e *elfLoader) parseProg(loadedMaps map[string]ebpf_maps.BpfMap) (map[strin
 
 }
 
-func (e *elfLoader) doLoadELF(inputData BpfCustomData) (map[string]BpfData, map[string]ebpf_maps.BpfMap, error) {
-	var err error
+func (e *elfLoader) doLoadELF(inputData BpfCustomData) (_ map[string]BpfData, _ map[string]ebpf_maps.BpfMap, err error) {
+	defer func() {
+		if err != nil {
+			e.releaseCreated()
+		}
+	}()
 
 	//Parse all sections
 	if err := e.parseSection(); err != nil {

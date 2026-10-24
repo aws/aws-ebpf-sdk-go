@@ -357,6 +357,7 @@ func (m *BpfProgram) LoadProg(progMetaData CreateEBPFProgInput) (int, error) {
 	err := m.PinProg(uint32(fd), progMetaData.PinPath)
 	if err != nil {
 		log.Errorf("pin prog failed %v", err)
+		unix.Close(int(fd))
 		return -1, err
 	}
 	return int(fd), nil
