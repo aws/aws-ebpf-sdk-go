@@ -2065,8 +2065,21 @@ func TestLoadFailureReleasesRealKernelPrograms(t *testing.T) {
 	assert.NoError(t, err)
 	loader := newElfLoader(elfFile, &ebpf_maps.BpfMap{}, progAPI, "rk_progfail", map[string]struct{}{"ingress_map": {}})
 
+	countFDs := func() int {
+		entries, err := os.ReadDir("/proc/self/fd")
+		assert.NoError(t, err)
+		return len(entries)
+	}
+	before := countFDs()
 	_, _, err = loader.doLoadELF(BpfCustomData{})
 	assert.ErrorContains(t, err, "associatedmapIDs failed")
+	// Only the two global maps the load cached in sdkCache keep an FD open.
+	assert.Equal(t, before+2, countFDs(), "program and namespaced map FDs must be closed")
+	for _, name := range []string{"aws_conntrack_map", "policy_events"} {
+		if fd, ok := sdkCache.Get(name); ok {
+			unix.Close(fd)
+		}
+	}
 	assert.Equal(t, []string{replacedPin}, listPins(), "only the replaced pin survives")
 	pinned, fd, err := (&ebpf_progs.BpfProgram{}).GetProgFromPinPath(replacedPin)
 	if assert.NoError(t, err) {
@@ -2074,4 +2087,29 @@ func TestLoadFailureReleasesRealKernelPrograms(t *testing.T) {
 		unix.Close(fd)
 	}
 	assert.NoError(t, utils.UnPinObject(replacedPin))
+}
+
+// A load that fails in parseProg, here on a kfunc the kernel lacks, releases
+// the maps it created before.
+func TestLoadFailureInParseProgReleasesMaps(t *testing.T) {
+	m := setup(t, "../../test-data/tc.kfunc.bpf.elf")
+	defer m.ctrl.Finish()
+	released := recordReleases(t)
+	t.Cleanup(func() { sdkCache.Delete("kfunc_counters") })
+	m.ebpf_maps.EXPECT().CreateBPFMap(gomock.Any()).Return(ebpf_maps.BpfMap{MapFD: 5}, nil).AnyTimes()
+	m.ebpf_maps.EXPECT().GetBPFmapInfo(gomock.Any()).Return(ebpf_maps.BpfMapInfo{Id: 100}, nil).AnyTimes()
+	m.ebpf_maps.EXPECT().GetMapFromPinPath(gomock.Any()).Return(ebpf_maps.BpfMapInfo{Id: 100}, nil).AnyTimes()
+
+	f, err := os.Open(m.path)
+	assert.NoError(t, err)
+	defer f.Close()
+	elfFile, err := elf.NewFile(f)
+	assert.NoError(t, err)
+	// kfunc_counters must be namespaced, or it is cached as global and kept.
+	loader := newElfLoader(elfFile, m.ebpf_maps, m.ebpf_progs, "test", map[string]struct{}{"kfunc_counters": {}})
+	loader.kfuncResolver = &fakeKfuncResolver{err: errors.New("injected")}
+
+	_, _, err = loader.doLoadELF(BpfCustomData{})
+	assert.ErrorContains(t, err, "injected")
+	assert.Equal(t, []createdObject{{fd: 5, pinPath: constdef.MAP_BPF_FS + "test_kfunc_counters"}}, *released)
 }
