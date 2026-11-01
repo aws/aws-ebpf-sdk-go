@@ -1917,6 +1917,14 @@ func TestLoadFailureReleasesRealKernelObjects(t *testing.T) {
 	}
 	assert.NoError(t, utils.Mount_bpf_fs())
 	defer utils.Unmount_bpf_fs()
+	t.Cleanup(func() {
+		for _, name := range []string{"aws_conntrack_map", "policy_events"} {
+			if fd, ok := sdkCache.Get(name); ok {
+				unix.Close(fd)
+				sdkCache.Delete(name)
+			}
+		}
+	})
 
 	var releasedFDs []int
 	orig := releaseObject
