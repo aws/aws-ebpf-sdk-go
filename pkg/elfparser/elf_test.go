@@ -23,6 +23,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/aws/aws-ebpf-sdk-go/pkg/internal/btf"
 	ebpf_maps "github.com/aws/aws-ebpf-sdk-go/pkg/maps"
@@ -2190,26 +2191,35 @@ func TestReleaseObjectOnFDZero(t *testing.T) {
 	require.NoError(t, utils.Mount_bpf_fs())
 	defer utils.Unmount_bpf_fs()
 
-	stdin, err := unix.Dup(0)
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		unix.Dup2(stdin, 0)
-		unix.Close(stdin)
-	})
-	require.NoError(t, unix.Close(0))
-
 	pinPath := constdef.MAP_BPF_FS + "rk_fdzero_map"
 	created, err := (&ebpf_maps.BpfMap{}).CreateBPFMap(ebpf_maps.CreateEBPFMapInput{
 		Type: uint32(constdef.BPF_MAP_TYPE_HASH.Index()), KeySize: 4, ValueSize: 4, MaxEntries: 1,
 		PinOptions: &ebpf_maps.BpfMapPinOptions{Type: constdef.PIN_GLOBAL_NS.Index(), PinPath: pinPath},
 	})
 	require.NoError(t, err)
-	require.Zero(t, created.MapFD, "the map should take the free fd 0")
+	info, err := ebpf_maps.GetBPFmapInfo(int(created.MapFD))
+	require.NoError(t, err)
+
+	// Move the map onto fd 0, as if the process had started with stdin closed.
+	stdin, err := unix.Dup(0)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		unix.Dup2(stdin, 0)
+		unix.Close(stdin)
+	})
+	require.NoError(t, unix.Dup2(int(created.MapFD), 0))
+	require.NoError(t, unix.Close(int(created.MapFD)))
 
 	releaseObject(createdObject{fd: 0, pinPath: pinPath})
 
-	_, err = unix.FcntlInt(0, unix.F_GETFD, 0)
-	assert.ErrorIs(t, err, unix.EBADF, "fd 0 must be closed")
 	_, err = os.Stat(pinPath)
 	assert.True(t, os.IsNotExist(err), "pin must be removed, got %v", err)
+	// With the pin and its only FD gone, the kernel frees the map.
+	assert.Eventually(t, func() bool {
+		fd, err := utils.GetMapFDFromID(int(info.Id))
+		if err == nil {
+			unix.Close(fd)
+		}
+		return err != nil
+	}, 2*time.Second, 50*time.Millisecond, "map %d must be freed", info.Id)
 }
