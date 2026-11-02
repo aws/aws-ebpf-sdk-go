@@ -1917,14 +1917,7 @@ func TestLoadFailureReleasesRealKernelObjects(t *testing.T) {
 	}
 	assert.NoError(t, utils.Mount_bpf_fs())
 	defer utils.Unmount_bpf_fs()
-	t.Cleanup(func() {
-		for _, name := range []string{"aws_conntrack_map", "policy_events"} {
-			if fd, ok := sdkCache.Get(name); ok {
-				unix.Close(fd)
-				sdkCache.Delete(name)
-			}
-		}
-	})
+	t.Cleanup(closeCachedGlobalMaps)
 
 	var releasedFDs []int
 	orig := releaseObject
@@ -1967,10 +1960,7 @@ func TestLoadFailureKeepsReplacedPin(t *testing.T) {
 	}
 	assert.NoError(t, utils.Mount_bpf_fs())
 	defer utils.Unmount_bpf_fs()
-	t.Cleanup(func() {
-		sdkCache.Delete("aws_conntrack_map")
-		sdkCache.Delete("policy_events")
-	})
+	t.Cleanup(closeCachedGlobalMaps)
 
 	pinPath := constdef.MAP_BPF_FS + "rk_replaced_ingress_map"
 	var foreign ebpf_maps.BpfMap
@@ -2120,4 +2110,56 @@ func TestLoadFailureInParseProgReleasesMaps(t *testing.T) {
 	_, _, err = loader.doLoadELF(BpfCustomData{})
 	assert.ErrorContains(t, err, "injected")
 	assert.Equal(t, []createdObject{{fd: 5, pinPath: constdef.MAP_BPF_FS + "test_kfunc_counters"}}, *released)
+}
+
+// closeCachedGlobalMaps closes and forgets the real global maps a
+// tc.ingress.bpf.elf load cached. Deleting a cache entry alone leaves its FD open.
+func closeCachedGlobalMaps() {
+	for _, name := range []string{"aws_conntrack_map", "policy_events"} {
+		if fd, ok := sdkCache.Get(name); ok {
+			unix.Close(fd)
+			sdkCache.Delete(name)
+		}
+	}
+}
+
+// Rollback unpins a map even when the failed load left no free descriptor:
+// the ownership check reopens the pin with the descriptor closing frees.
+func TestReleaseObjectAtDescriptorLimit(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("requires root to create maps in the kernel")
+	}
+	assert.NoError(t, utils.Mount_bpf_fs())
+	defer utils.Unmount_bpf_fs()
+
+	pinPath := constdef.MAP_BPF_FS + "rk_fdlimit_map"
+	created, err := (&ebpf_maps.BpfMap{}).CreateBPFMap(ebpf_maps.CreateEBPFMapInput{
+		Type: uint32(constdef.BPF_MAP_TYPE_HASH.Index()), KeySize: 4, ValueSize: 4, MaxEntries: 1,
+		PinOptions: &ebpf_maps.BpfMapPinOptions{Type: constdef.PIN_GLOBAL_NS.Index(), PinPath: pinPath},
+	})
+	assert.NoError(t, err)
+
+	var limit unix.Rlimit
+	assert.NoError(t, unix.Getrlimit(unix.RLIMIT_NOFILE, &limit))
+	lowered := limit
+	lowered.Cur = 256
+	assert.NoError(t, unix.Setrlimit(unix.RLIMIT_NOFILE, &lowered))
+	var fillers []int
+	for {
+		fd, err := unix.Open(os.DevNull, unix.O_RDONLY|unix.O_CLOEXEC, 0)
+		if err != nil {
+			assert.ErrorIs(t, err, unix.EMFILE)
+			break
+		}
+		fillers = append(fillers, fd)
+	}
+
+	releaseObject(createdObject{fd: int(created.MapFD), pinPath: pinPath})
+
+	for _, fd := range fillers {
+		unix.Close(fd)
+	}
+	assert.NoError(t, unix.Setrlimit(unix.RLIMIT_NOFILE, &limit))
+	_, err = os.Stat(pinPath)
+	assert.True(t, os.IsNotExist(err), "pin must be removed at the descriptor limit, got %v", err)
 }

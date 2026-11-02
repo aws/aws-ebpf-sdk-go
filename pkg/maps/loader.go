@@ -708,9 +708,10 @@ func (m *BpfMap) GetMapFromPinPath(pinPath string) (BpfMapInfo, error) {
 
 	}
 
-	bpfMapInfo, err := GetBPFmapInfo(mapFD)
+	bpfMapInfo, err := mapInfoByFD(mapFD)
 	if err != nil {
 		log.Errorf("failed to get map Info for FD - %d", mapFD)
+		unix.Close(int(mapFD))
 		return bpfMapInfo, err
 	}
 	err = unix.Close(int(mapFD))
@@ -720,6 +721,9 @@ func (m *BpfMap) GetMapFromPinPath(pinPath string) (BpfMapInfo, error) {
 
 	return bpfMapInfo, nil
 }
+
+// mapInfoByFD is GetBPFmapInfo. Overridden in tests.
+var mapInfoByFD = GetBPFmapInfo
 
 func GetFirstMapEntryByID(nextKey uintptr, mapID int) error {
 	return GetNextMapEntryByID(uintptr(unsafe.Pointer(nil)), nextKey, mapID)

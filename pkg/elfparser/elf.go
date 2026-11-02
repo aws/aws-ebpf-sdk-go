@@ -241,46 +241,52 @@ type createdObject struct {
 // releaseObject closes an object a failed load created, and unpins it if the
 // pin still holds that object. Overridden in tests.
 var releaseObject = func(obj createdObject) {
-	if obj.pinPath != "" {
-		if pinHoldsObject(obj) {
-			if err := utils.UnPinObject(obj.pinPath); err != nil {
-				log.Errorf("failed to unpin %s: %v", obj.pinPath, err)
-			}
-		} else {
-			log.Infof("keeping %s: pin does not hold fd %d", obj.pinPath, obj.fd)
-		}
-	}
+	// Read the object's ID before closing its FD, so the ownership check can
+	// reopen the pin with the descriptor that closing frees, even if the load
+	// used up the descriptor limit.
+	ourID, idErr := objectID(obj)
 	if obj.fd > 0 {
 		unix.Close(obj.fd)
 	}
+	if obj.pinPath == "" {
+		return
+	}
+	if idErr == nil {
+		if pinnedID, err := pinnedObjectID(obj); err == nil && pinnedID == ourID {
+			if err := utils.UnPinObject(obj.pinPath); err != nil {
+				log.Errorf("failed to unpin %s: %v", obj.pinPath, err)
+			}
+			return
+		}
+	}
+	log.Infof("keeping %s: pin does not hold fd %d", obj.pinPath, obj.fd)
 }
 
-// pinHoldsObject reports whether obj.pinPath refers to the object behind obj.fd.
-// It may not if pinning was skipped or failed, or if another load replaced the
+// objectID returns the kernel ID of the object behind obj.fd.
+func objectID(obj createdObject) (uint32, error) {
+	if obj.isProg {
+		info, err := ebpf_progs.GetBPFprogInfo(obj.fd)
+		return info.ID, err
+	}
+	info, err := ebpf_maps.GetBPFmapInfo(obj.fd)
+	return info.Id, err
+}
+
+// pinnedObjectID returns the kernel ID of the object at obj.pinPath. It may not
+// be obj's if pinning was skipped or failed, or if another load replaced the
 // pin. The check and the unpin are not atomic, so loads of the same pin path
 // must be serialized by the caller.
-func pinHoldsObject(obj createdObject) bool {
+func pinnedObjectID(obj createdObject) (uint32, error) {
 	if obj.isProg {
-		ours, err := ebpf_progs.GetBPFprogInfo(obj.fd)
+		info, fd, err := (&ebpf_progs.BpfProgram{}).GetProgFromPinPath(obj.pinPath)
 		if err != nil {
-			return false
+			return 0, err
 		}
-		pinned, pinnedFD, err := (&ebpf_progs.BpfProgram{}).GetProgFromPinPath(obj.pinPath)
-		if err != nil {
-			return false
-		}
-		unix.Close(pinnedFD)
-		return pinned.ID == ours.ID
+		unix.Close(fd)
+		return info.ID, nil
 	}
-	ours, err := ebpf_maps.GetBPFmapInfo(obj.fd)
-	if err != nil {
-		return false
-	}
-	pinned, err := (&ebpf_maps.BpfMap{}).GetMapFromPinPath(obj.pinPath)
-	if err != nil {
-		return false
-	}
-	return pinned.Id == ours.Id
+	info, err := (&ebpf_maps.BpfMap{}).GetMapFromPinPath(obj.pinPath)
+	return info.Id, err
 }
 
 // releaseCreated releases what this load created, newest first.
