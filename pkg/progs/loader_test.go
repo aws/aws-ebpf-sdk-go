@@ -15,13 +15,19 @@
 package progs
 
 import (
+	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"testing"
 	"unsafe"
 
+	constdef "github.com/aws/aws-ebpf-sdk-go/pkg/constants"
 	"github.com/aws/aws-ebpf-sdk-go/pkg/metrics"
+	"github.com/aws/aws-ebpf-sdk-go/pkg/utils"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"golang.org/x/sys/unix"
 )
 
@@ -164,4 +170,66 @@ func TestProgLoadAttrLayout(t *testing.T) {
 	assert.Equal(t, uintptr(112), unsafe.Offsetof(attr.attachProgFD))
 	assert.Equal(t, uintptr(120), unsafe.Offsetof(attr.fdArray))
 	assert.Equal(t, uintptr(128), unsafe.Sizeof(attr))
+}
+
+// LoadProg closes the program FD when pinning fails.
+func TestLoadProgClosesFDWhenPinFails(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("requires root to load programs into the kernel")
+	}
+	notADir := filepath.Join(t.TempDir(), "file")
+	assert.NoError(t, os.WriteFile(notADir, nil, 0600))
+	pinPath := filepath.Join(notADir, "prog")
+	// mov r0, 0; exit
+	insns := []byte{0xb7, 0, 0, 0, 0, 0, 0, 0, 0x95, 0, 0, 0, 0, 0, 0, 0}
+	countFDs := func() int {
+		entries, err := os.ReadDir("/proc/self/fd")
+		assert.NoError(t, err)
+		return len(entries)
+	}
+
+	before := countFDs()
+	fd, err := (&BpfProgram{}).LoadProg(CreateEBPFProgInput{
+		ProgType:   "tc_cls",
+		ProgData:   insns,
+		LicenseStr: "GPL",
+		PinPath:    pinPath,
+		InsDefSize: 8,
+	})
+	// The error must come from pinning, not from the load itself.
+	assert.ErrorContains(t, err, pinPath)
+	assert.Equal(t, -1, fd)
+	assert.Equal(t, before, countFDs())
+}
+
+// GetProgFromPinPath closes the FD it opened when the info query fails.
+func TestGetProgFromPinPathClosesFDOnInfoError(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("requires root to load programs into the kernel")
+	}
+	require.NoError(t, utils.Mount_bpf_fs())
+	defer utils.Unmount_bpf_fs()
+	pinPath := constdef.PROG_BPF_FS + "rk_infoerr_prog"
+	// mov r0, 0; exit
+	insns := []byte{0xb7, 0, 0, 0, 0, 0, 0, 0, 0x95, 0, 0, 0, 0, 0, 0, 0}
+	fd, err := (&BpfProgram{}).LoadProg(CreateEBPFProgInput{
+		ProgType: "tc_cls", ProgData: insns, LicenseStr: "GPL", PinPath: pinPath, InsDefSize: 8,
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { unix.Close(fd) })
+
+	orig := progInfoByFD
+	t.Cleanup(func() { progInfoByFD = orig })
+	progInfoByFD = func(int) (BpfProgInfo, error) { return BpfProgInfo{}, errors.New("injected") }
+	countFDs := func() int {
+		entries, err := os.ReadDir("/proc/self/fd")
+		require.NoError(t, err)
+		return len(entries)
+	}
+
+	before := countFDs()
+	_, pinnedFD, err := (&BpfProgram{}).GetProgFromPinPath(pinPath)
+	assert.ErrorContains(t, err, "injected")
+	assert.Equal(t, -1, pinnedFD)
+	assert.Equal(t, before, countFDs())
 }

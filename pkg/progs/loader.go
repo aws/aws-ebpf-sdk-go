@@ -357,6 +357,7 @@ func (m *BpfProgram) LoadProg(progMetaData CreateEBPFProgInput) (int, error) {
 	err := m.PinProg(uint32(fd), progMetaData.PinPath)
 	if err != nil {
 		log.Errorf("pin prog failed %v", err)
+		unix.Close(int(fd))
 		return -1, err
 	}
 	return int(fd), nil
@@ -547,6 +548,9 @@ func (attr *BpfObjGet) BpfGetObject() (int, error) {
 	return int(ret), nil
 }
 
+// progInfoByFD is GetBPFprogInfo. Overridden in tests.
+var progInfoByFD = GetBPFprogInfo
+
 func (m *BpfProgram) GetProgFromPinPath(pinPath string) (BpfProgInfo, int, error) {
 	log.Infof("Printing pinpath - %s ", pinPath)
 	if len(pinPath) == 0 {
@@ -566,9 +570,10 @@ func (m *BpfProgram) GetProgFromPinPath(pinPath string) (BpfProgInfo, int, error
 	}
 
 	log.Infof("Got progFD - %d", progFD)
-	bpfProgInfo, err := GetBPFprogInfo(progFD)
+	bpfProgInfo, err := progInfoByFD(progFD)
 	if err != nil {
 		log.Errorf("failed to get program Info for FD - %d", progFD)
+		unix.Close(progFD)
 		return bpfProgInfo, -1, err
 	}
 

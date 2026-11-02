@@ -138,6 +138,10 @@ type elfLoader struct {
 	fdArray      []int32
 	fdArrayIndex map[int]int16
 	fdArrayProgs map[uint32]struct{}
+
+	// created holds the maps and programs this load created, so a failed load
+	// can release them. Global maps leave it once they are added to sdkCache.
+	created []createdObject
 }
 
 func New(cfg Config) BpfSDKClient {
@@ -228,6 +232,73 @@ func (b *bpfSDKClient) LoadBpfFileWithCustomData(inputData BpfCustomData) (map[s
 	return bpfLoadedProg, bpfLoadedMaps, nil
 }
 
+type createdObject struct {
+	fd      int
+	pinPath string
+	isProg  bool
+}
+
+// releaseObject closes an object a failed load created, and unpins it if the
+// pin still holds that object. Overridden in tests.
+var releaseObject = func(obj createdObject) {
+	// Read the object's ID before closing its FD, so the ownership check can
+	// reopen the pin with the descriptor that closing frees, even if the load
+	// used up the descriptor limit.
+	ourID, idErr := objectID(obj)
+	// Every recorded FD came from a successful create, so 0 is valid here, for
+	// example if stdin was closed.
+	if obj.fd >= 0 {
+		unix.Close(obj.fd)
+	}
+	if obj.pinPath == "" {
+		return
+	}
+	if idErr == nil {
+		if pinnedID, err := pinnedObjectID(obj); err == nil && pinnedID == ourID {
+			if err := utils.UnPinObject(obj.pinPath); err != nil {
+				log.Errorf("failed to unpin %s: %v", obj.pinPath, err)
+			}
+			return
+		}
+	}
+	log.Infof("keeping %s: pin does not hold fd %d", obj.pinPath, obj.fd)
+}
+
+// objectID returns the kernel ID of the object behind obj.fd.
+func objectID(obj createdObject) (uint32, error) {
+	if obj.isProg {
+		info, err := ebpf_progs.GetBPFprogInfo(obj.fd)
+		return info.ID, err
+	}
+	info, err := ebpf_maps.GetBPFmapInfo(obj.fd)
+	return info.Id, err
+}
+
+// pinnedObjectID returns the kernel ID of the object at obj.pinPath. It may not
+// be obj's if pinning was skipped or failed, or if another load replaced the
+// pin. The check and the unpin are not atomic, so loads of the same pin path
+// must be serialized by the caller.
+func pinnedObjectID(obj createdObject) (uint32, error) {
+	if obj.isProg {
+		info, fd, err := (&ebpf_progs.BpfProgram{}).GetProgFromPinPath(obj.pinPath)
+		if err != nil {
+			return 0, err
+		}
+		unix.Close(fd)
+		return info.ID, nil
+	}
+	info, err := (&ebpf_maps.BpfMap{}).GetMapFromPinPath(obj.pinPath)
+	return info.Id, err
+}
+
+// releaseCreated releases what this load created, newest first.
+func (e *elfLoader) releaseCreated() {
+	for i := len(e.created) - 1; i >= 0; i-- {
+		releaseObject(e.created[i])
+	}
+	e.created = nil
+}
+
 func (e *elfLoader) loadMap(parsedMapData []ebpf_maps.CreateEBPFMapInput) (map[string]ebpf_maps.BpfMap, error) {
 
 	programmedMaps := make(map[string]ebpf_maps.BpfMap)
@@ -251,6 +322,11 @@ func (e *elfLoader) loadMap(parsedMapData []ebpf_maps.CreateEBPFMapInput) (map[s
 			log.Errorf("failed to create map %v", err)
 			return nil, err
 		}
+		obj := createdObject{fd: int(bpfMap.MapFD)}
+		if loadedMaps.PinOptions.Type != constdef.PIN_NONE.Index() {
+			obj.pinPath = pinPath
+		}
+		e.created = append(e.created, obj)
 
 		//Fill ID
 		if loadedMaps.PinOptions.Type == constdef.PIN_NONE.Index() {
@@ -270,10 +346,14 @@ func (e *elfLoader) loadMap(parsedMapData []ebpf_maps.CreateEBPFMapInput) (map[s
 
 		programmedMaps[loadedMaps.Name] = bpfMap
 
-		if e.IsMapGlobal(pinPath) {
+		// Classify by map name: pinPath can't be split reliably when the
+		// pin prefix contains '_'.
+		if !e.isNamespacedMap(loadedMaps.Name) {
 			//Add to global cache
 			sdkCache.Set(loadedMaps.Name, int(bpfMap.MapFD))
 			log.Infof("Added map Name %s and FD %d to SDK cache", loadedMaps.Name, bpfMap.MapFD)
+			// Cached maps are shared with later loads, so a failed load keeps them.
+			e.created = e.created[:len(e.created)-1]
 		}
 	}
 	return programmedMaps, nil
@@ -347,6 +427,7 @@ func (e *elfLoader) loadProg(loadedProgData map[string]ebpf_progs.CreateEBPFProg
 			return nil, fmt.Errorf("failed to Load the prog: %w", errno)
 		}
 		log.Infof("loaded prog with %d", progFD)
+		e.created = append(e.created, createdObject{fd: progFD, pinPath: pgmInput.PinPath, isProg: true})
 
 		//Fill ID
 		progInfo, newProgFD, err := e.bpfProgApi.GetProgFromPinPath(pgmInput.PinPath)
@@ -1076,8 +1157,12 @@ func (e *elfLoader) parseProg(loadedMaps map[string]ebpf_maps.BpfMap) (map[strin
 
 }
 
-func (e *elfLoader) doLoadELF(inputData BpfCustomData) (map[string]BpfData, map[string]ebpf_maps.BpfMap, error) {
-	var err error
+func (e *elfLoader) doLoadELF(inputData BpfCustomData) (_ map[string]BpfData, _ map[string]ebpf_maps.BpfMap, err error) {
+	defer func() {
+		if err != nil {
+			e.releaseCreated()
+		}
+	}()
 
 	//Parse all sections
 	if err := e.parseSection(); err != nil {
