@@ -34,6 +34,7 @@ import (
 	"github.com/aws/aws-ebpf-sdk-go/pkg/utils"
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"golang.org/x/sys/unix"
 )
 
@@ -119,7 +120,8 @@ func TestLoad(t *testing.T) {
 			m.ebpf_progs.EXPECT().LoadProg(gomock.Any()).AnyTimes()
 			m.ebpf_maps.EXPECT().PinMap(gomock.Any(), gomock.Any()).AnyTimes()
 			m.ebpf_maps.EXPECT().GetMapFromPinPath(gomock.Any()).AnyTimes()
-			m.ebpf_progs.EXPECT().GetProgFromPinPath(gomock.Any()).AnyTimes()
+			// -1: loadProg closes this FD, and a zero value would close stdin.
+			m.ebpf_progs.EXPECT().GetProgFromPinPath(gomock.Any()).Return(ebpf_progs.BpfProgInfo{}, -1, nil).AnyTimes()
 			m.ebpf_progs.EXPECT().GetBPFProgAssociatedMapsIDs(gomock.Any()).AnyTimes()
 
 			elfFile, err := elf.NewFile(f)
@@ -2129,26 +2131,44 @@ func TestReleaseObjectAtDescriptorLimit(t *testing.T) {
 	if os.Geteuid() != 0 {
 		t.Skip("requires root to create maps in the kernel")
 	}
-	assert.NoError(t, utils.Mount_bpf_fs())
+	require.NoError(t, utils.Mount_bpf_fs())
 	defer utils.Unmount_bpf_fs()
+	// releaseObject never closes fd 0, so keep the map off it in case an
+	// earlier test closed stdin.
+	if _, err := unix.FcntlInt(0, unix.F_GETFD, 0); err != nil {
+		devNull, err := unix.Open(os.DevNull, unix.O_RDONLY, 0)
+		require.NoError(t, err)
+		require.NoError(t, unix.Dup2(devNull, 0))
+		unix.Close(devNull)
+	}
 
 	pinPath := constdef.MAP_BPF_FS + "rk_fdlimit_map"
 	created, err := (&ebpf_maps.BpfMap{}).CreateBPFMap(ebpf_maps.CreateEBPFMapInput{
 		Type: uint32(constdef.BPF_MAP_TYPE_HASH.Index()), KeySize: 4, ValueSize: 4, MaxEntries: 1,
 		PinOptions: &ebpf_maps.BpfMapPinOptions{Type: constdef.PIN_GLOBAL_NS.Index(), PinPath: pinPath},
 	})
-	assert.NoError(t, err)
+	require.NoError(t, err)
+	require.NotZero(t, created.MapFD)
+	t.Cleanup(func() { utils.UnPinObject(pinPath) })
 
+	open, err := os.ReadDir("/proc/self/fd")
+	require.NoError(t, err)
 	var limit unix.Rlimit
-	assert.NoError(t, unix.Getrlimit(unix.RLIMIT_NOFILE, &limit))
+	require.NoError(t, unix.Getrlimit(unix.RLIMIT_NOFILE, &limit))
 	lowered := limit
-	lowered.Cur = 256
-	assert.NoError(t, unix.Setrlimit(unix.RLIMIT_NOFILE, &lowered))
+	lowered.Cur = uint64(len(open) + 16)
+	require.NoError(t, unix.Setrlimit(unix.RLIMIT_NOFILE, &lowered))
 	var fillers []int
+	t.Cleanup(func() {
+		for _, fd := range fillers {
+			unix.Close(fd)
+		}
+		unix.Setrlimit(unix.RLIMIT_NOFILE, &limit)
+	})
 	for {
 		fd, err := unix.Open(os.DevNull, unix.O_RDONLY|unix.O_CLOEXEC, 0)
 		if err != nil {
-			assert.ErrorIs(t, err, unix.EMFILE)
+			require.ErrorIs(t, err, unix.EMFILE)
 			break
 		}
 		fillers = append(fillers, fd)
@@ -2156,10 +2176,6 @@ func TestReleaseObjectAtDescriptorLimit(t *testing.T) {
 
 	releaseObject(createdObject{fd: int(created.MapFD), pinPath: pinPath})
 
-	for _, fd := range fillers {
-		unix.Close(fd)
-	}
-	assert.NoError(t, unix.Setrlimit(unix.RLIMIT_NOFILE, &limit))
 	_, err = os.Stat(pinPath)
 	assert.True(t, os.IsNotExist(err), "pin must be removed at the descriptor limit, got %v", err)
 }
