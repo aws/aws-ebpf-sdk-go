@@ -2133,13 +2133,15 @@ func TestReleaseObjectAtDescriptorLimit(t *testing.T) {
 	}
 	require.NoError(t, utils.Mount_bpf_fs())
 	defer utils.Unmount_bpf_fs()
-	// releaseObject never closes fd 0, so keep the map off it in case an
-	// earlier test closed stdin.
+	// Keep the map off fd 0 in case an earlier test closed stdin. Open
+	// returns the lowest free descriptor, so it takes fd 0 itself then.
 	if _, err := unix.FcntlInt(0, unix.F_GETFD, 0); err != nil {
 		devNull, err := unix.Open(os.DevNull, unix.O_RDONLY, 0)
 		require.NoError(t, err)
-		require.NoError(t, unix.Dup2(devNull, 0))
-		unix.Close(devNull)
+		if devNull != 0 {
+			require.NoError(t, unix.Dup2(devNull, 0))
+			unix.Close(devNull)
+		}
 	}
 
 	pinPath := constdef.MAP_BPF_FS + "rk_fdlimit_map"
@@ -2177,4 +2179,37 @@ func TestReleaseObjectAtDescriptorLimit(t *testing.T) {
 
 	_, err = os.Stat(pinPath)
 	assert.True(t, os.IsNotExist(err), "pin must be removed at the descriptor limit, got %v", err)
+}
+
+// An object a failed load created on fd 0 (stdin closed) is still closed and
+// unpinned.
+func TestReleaseObjectOnFDZero(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("requires root to create maps in the kernel")
+	}
+	require.NoError(t, utils.Mount_bpf_fs())
+	defer utils.Unmount_bpf_fs()
+
+	stdin, err := unix.Dup(0)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		unix.Dup2(stdin, 0)
+		unix.Close(stdin)
+	})
+	require.NoError(t, unix.Close(0))
+
+	pinPath := constdef.MAP_BPF_FS + "rk_fdzero_map"
+	created, err := (&ebpf_maps.BpfMap{}).CreateBPFMap(ebpf_maps.CreateEBPFMapInput{
+		Type: uint32(constdef.BPF_MAP_TYPE_HASH.Index()), KeySize: 4, ValueSize: 4, MaxEntries: 1,
+		PinOptions: &ebpf_maps.BpfMapPinOptions{Type: constdef.PIN_GLOBAL_NS.Index(), PinPath: pinPath},
+	})
+	require.NoError(t, err)
+	require.Zero(t, created.MapFD, "the map should take the free fd 0")
+
+	releaseObject(createdObject{fd: 0, pinPath: pinPath})
+
+	_, err = unix.FcntlInt(0, unix.F_GETFD, 0)
+	assert.ErrorIs(t, err, unix.EBADF, "fd 0 must be closed")
+	_, err = os.Stat(pinPath)
+	assert.True(t, os.IsNotExist(err), "pin must be removed, got %v", err)
 }
