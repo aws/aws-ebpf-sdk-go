@@ -245,8 +245,8 @@ var releaseObject = func(obj createdObject) {
 	// reopen the pin with the descriptor that closing frees, even if the load
 	// used up the descriptor limit.
 	ourID, idErr := objectID(obj)
-	// Every recorded FD came from a successful create, so 0 is valid here (a
-	// process started with stdin closed).
+	// Every recorded FD came from a successful create, so 0 is valid here, for
+	// example if stdin was closed.
 	if obj.fd >= 0 {
 		unix.Close(obj.fd)
 	}
