@@ -2149,7 +2149,6 @@ func TestReleaseObjectAtDescriptorLimit(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.NotZero(t, created.MapFD)
-	t.Cleanup(func() { utils.UnPinObject(pinPath) })
 
 	open, err := os.ReadDir("/proc/self/fd")
 	require.NoError(t, err)
