@@ -12,6 +12,7 @@ import (
 	"unsafe"
 
 	goelf "github.com/aws/aws-ebpf-sdk-go/pkg/elfparser"
+	ebpf_progs "github.com/aws/aws-ebpf-sdk-go/pkg/progs"
 	ebpf_tc "github.com/aws/aws-ebpf-sdk-go/pkg/tc"
 	"github.com/fatih/color"
 )
@@ -66,6 +67,7 @@ func main() {
 		{Name: "Test updating Map size", Func: TestLoadMapWithCustomSize},
 		{Name: "Test bulk Map operations", Func: TestBulkMapOperations},
 		{Name: "Test bulk refresh Map operations", Func: TestBulkRefreshMapOperations},
+		{Name: "Test tail call prog array", Func: TestTailCallProgArray},
 	}
 
 	testSummary := make(map[string]string)
@@ -513,5 +515,116 @@ func TestBulkRefreshMapOperations() error {
 	}
 	fmt.Println("Updated 32K entries successfully")
 
+	return nil
+}
+
+func TestTailCallProgArray() error {
+	gosdkClient := goelf.New(goelf.Config{})
+
+	// Load caller programs (contains the prog array map)
+	progInfo, loadedMaps, err := gosdkClient.LoadBpfFile("c/tc.tailcall.bpf.elf", "tailcall")
+	if err != nil {
+		return fmt.Errorf("load tailcall BPF: %w", err)
+	}
+	for pinPath := range progInfo {
+		fmt.Println("  Caller pin path:", pinPath)
+	}
+
+	progArrayMap, ok := loadedMaps["tailcall_map"]
+	if !ok {
+		return fmt.Errorf("tailcall_map not found in loaded maps")
+	}
+	fmt.Println("Found tailcall_map FD:", progArrayMap.MapFD)
+
+	// Load tail call target programs
+	targetProgInfo, _, err := gosdkClient.LoadBpfFile("c/tc.tailcall_target.bpf.elf", "target")
+	if err != nil {
+		return fmt.Errorf("load tailcall targets: %w", err)
+	}
+
+	dropFD, passFD := -1, -1
+	for pinPath, data := range targetProgInfo {
+		switch {
+		case strings.Contains(pinPath, "tailcall_target_drop"):
+			dropFD = data.Program.ProgFD
+		case strings.Contains(pinPath, "tailcall_target_pass"):
+			passFD = data.Program.ProgFD
+		}
+	}
+	if dropFD < 0 || passFD < 0 {
+		return fmt.Errorf("target FDs not found: drop=%d pass=%d", dropFD, passFD)
+	}
+	fmt.Printf("  Drop FD: %d, Pass FD: %d\n", dropFD, passFD)
+
+	// Populate prog array slots
+	if err := progArrayMap.UpdateProgArrayEntry(0, dropFD); err != nil {
+		return fmt.Errorf("update slot 0: %w", err)
+	}
+	if err := progArrayMap.UpdateProgArrayEntry(1, passFD); err != nil {
+		return fmt.Errorf("update slot 1: %w", err)
+	}
+
+	// Verify slots (prog array lookup returns program IDs, not FDs)
+	dropProgInfo, err := ebpf_progs.GetBPFprogInfo(dropFD)
+	if err != nil {
+		return fmt.Errorf("get drop prog info: %w", err)
+	}
+	passProgInfo, err := ebpf_progs.GetBPFprogInfo(passFD)
+	if err != nil {
+		return fmt.Errorf("get pass prog info: %w", err)
+	}
+
+	key0, val0 := uint32(0), uint32(0)
+	if err := progArrayMap.GetMapEntry(uintptr(unsafe.Pointer(&key0)), uintptr(unsafe.Pointer(&val0))); err != nil {
+		return fmt.Errorf("read slot 0: %w", err)
+	}
+	if val0 != dropProgInfo.ID {
+		return fmt.Errorf("slot 0: want prog ID %d, got %d", dropProgInfo.ID, val0)
+	}
+	fmt.Printf("Slot 0 verified: prog ID %d\n", val0)
+
+	key1, val1 := uint32(1), uint32(0)
+	if err := progArrayMap.GetMapEntry(uintptr(unsafe.Pointer(&key1)), uintptr(unsafe.Pointer(&val1))); err != nil {
+		return fmt.Errorf("read slot 1: %w", err)
+	}
+	if val1 != passProgInfo.ID {
+		return fmt.Errorf("slot 1: want prog ID %d, got %d", passProgInfo.ID, val1)
+	}
+	fmt.Printf("Slot 1 verified: prog ID %d\n", val1)
+
+	// Overwrite slot 0 with pass program
+	if err := progArrayMap.UpdateProgArrayEntry(0, passFD); err != nil {
+		return fmt.Errorf("overwrite slot 0: %w", err)
+	}
+	val0 = 0
+	if err := progArrayMap.GetMapEntry(uintptr(unsafe.Pointer(&key0)), uintptr(unsafe.Pointer(&val0))); err != nil {
+		return fmt.Errorf("read overwritten slot 0: %w", err)
+	}
+	if val0 != passProgInfo.ID {
+		return fmt.Errorf("overwritten slot 0: want %d, got %d", passProgInfo.ID, val0)
+	}
+	fmt.Printf("Slot 0 overwrite verified: prog ID %d\n", val0)
+
+	// Delete slot 1 and verify lookup fails
+	if err := progArrayMap.DeleteProgArrayEntry(1); err != nil {
+		return fmt.Errorf("delete slot 1: %w", err)
+	}
+	val1 = 0
+	if err := progArrayMap.GetMapEntry(uintptr(unsafe.Pointer(&key1)), uintptr(unsafe.Pointer(&val1))); err == nil {
+		return fmt.Errorf("slot 1 should be empty after delete, got prog ID %d", val1)
+	}
+	fmt.Println("Slot 1 deletion verified")
+
+	// Negative FD rejected
+	if err := progArrayMap.UpdateProgArrayEntry(0, -1); err == nil {
+		return fmt.Errorf("expected error for negative FD")
+	}
+
+	// Cleanup
+	if err := progArrayMap.DeleteProgArrayEntry(0); err != nil {
+		return fmt.Errorf("cleanup slot 0: %w", err)
+	}
+
+	fmt.Println("Tail call prog array test PASSED!")
 	return nil
 }

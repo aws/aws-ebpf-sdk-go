@@ -59,7 +59,9 @@ TARGETS := \
 		  $(TESTDATADIR)/tc.multi_prog_one_section \
 		  $(TESTDATADIR)/tc.multi_prog_one_section_subprog \
 		  $(TESTDATADIR)/tc.kfunc \
-		  $(TESTDATADIR)/tc.kfunc_subprog
+		  $(TESTDATADIR)/tc.kfunc_subprog \
+		  $(TESTDATADIR)/tc.tailcall \
+		  $(TESTDATADIR)/tc.tailcall_target
 
 %.bpf.elf: %.bpf.c
 	$(CLANG) $(CLANG_INCLUDE) $(BPF_CFLAGS) -c $< -o $@

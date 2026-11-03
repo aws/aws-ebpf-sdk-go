@@ -30,6 +30,13 @@ var (
 	// progLoadEAGAINExhausted counts BPF_PROG_LOAD calls that returned EAGAIN on
 	// every attempt and were given up on — these are genuine enforcement gaps.
 	progLoadEAGAINExhausted atomic.Uint64
+	// mapMutateENOMEMRetries counts individual map mutation attempts that
+	// returned ENOMEM and were retried, so this is an attempt count rather than
+	// a mutation count.
+	mapMutateENOMEMRetries atomic.Uint64
+	// mapMutateENOMEMExhausted counts map mutations that returned ENOMEM on
+	// every attempt and were given up on — these are genuine enforcement gaps.
+	mapMutateENOMEMExhausted atomic.Uint64
 )
 
 // RecordProgLoadEAGAINRetry records one BPF_PROG_LOAD attempt that was retried
@@ -47,3 +54,19 @@ func ProgLoadEAGAINRetries() uint64 { return progLoadEAGAINRetries.Load() }
 // ProgLoadEAGAINExhausted returns the cumulative number of BPF_PROG_LOAD calls
 // that exhausted all retry attempts on EAGAIN and failed.
 func ProgLoadEAGAINExhausted() uint64 { return progLoadEAGAINExhausted.Load() }
+
+// RecordMapMutateENOMEMRetry records one map mutation attempt that was retried
+// after the kernel returned ENOMEM.
+func RecordMapMutateENOMEMRetry() { mapMutateENOMEMRetries.Add(1) }
+
+// RecordMapMutateENOMEMExhausted records one map mutation that exhausted all
+// retry attempts on ENOMEM and failed.
+func RecordMapMutateENOMEMExhausted() { mapMutateENOMEMExhausted.Add(1) }
+
+// MapMutateENOMEMRetries returns the cumulative number of map mutation attempts
+// retried after the kernel returned ENOMEM.
+func MapMutateENOMEMRetries() uint64 { return mapMutateENOMEMRetries.Load() }
+
+// MapMutateENOMEMExhausted returns the cumulative number of map mutations that
+// exhausted all retry attempts on ENOMEM and failed.
+func MapMutateENOMEMExhausted() uint64 { return mapMutateENOMEMExhausted.Load() }

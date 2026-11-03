@@ -42,6 +42,21 @@ func TestProgLoadEAGAINCounters(t *testing.T) {
 	assert.Equal(t, uint64(1), ProgLoadEAGAINExhausted())
 }
 
+func TestMapMutateENOMEMCounters(t *testing.T) {
+	mapMutateENOMEMRetries.Store(0)
+	mapMutateENOMEMExhausted.Store(0)
+
+	assert.Equal(t, uint64(0), MapMutateENOMEMRetries())
+	assert.Equal(t, uint64(0), MapMutateENOMEMExhausted())
+
+	RecordMapMutateENOMEMRetry()
+	RecordMapMutateENOMEMRetry()
+	RecordMapMutateENOMEMExhausted()
+
+	assert.Equal(t, uint64(2), MapMutateENOMEMRetries())
+	assert.Equal(t, uint64(1), MapMutateENOMEMExhausted())
+}
+
 func TestProgLoadEAGAINCountersConcurrent(t *testing.T) {
 	resetProgLoadEAGAINCounters()
 

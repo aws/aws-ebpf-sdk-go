@@ -53,7 +53,8 @@ goebpfelfparser "github.com/aws/aws-ebpf-sdk-go/pkg/elfparser"
 3. Load the elf -
 
 ```
-goebpfelfparser.LoadBpfFile(<ELF file>, <custom pin path>)
+sdkClient := goebpfelfparser.New(goebpfelfparser.Config{})
+sdkClient.LoadBpfFile(<ELF file>, <custom pin path>)
 ```
 
 On a successful load, SDK returns -
@@ -101,6 +102,41 @@ struct bpf_map_def_pvt {
 	__u32 inner_map_fd;
 };
 ```
+
+## How to use tail calls (BPF_MAP_TYPE_PROG_ARRAY)?
+
+Declare a `BPF_MAP_TYPE_PROG_ARRAY` map in your BPF C source and use
+`bpf_tail_call()` as usual. The SDK handles map relocation like any other
+map. Populating the prog array is done after loading, once target program
+FDs are available.
+
+### Example
+
+```go
+sdkClient := goebpfelfparser.New(goebpfelfparser.Config{})
+
+// Load the caller (creates the prog array map)
+callerProgs, maps, err := sdkClient.LoadBpfFile("tc.policy.bpf.elf", "policy")
+
+// Load the tail call target
+targetProgs, _, err := sdkClient.LoadBpfFile("tc.edt.bpf.elf", "edt")
+
+// Wire target into prog array slot
+progArray := maps["jump_table"]
+for pinPath, data := range targetProgs {
+    if strings.Contains(pinPath, "handle_edt") {
+        err = progArray.UpdateProgArrayEntry(1, data.Program.ProgFD)
+        break
+    }
+}
+
+// Remove a slot (tail call to this index falls through)
+err = progArray.DeleteProgArrayEntry(1)
+```
+
+`LoadBpfFile` returns programs keyed by full pin path
+(e.g. `/sys/fs/bpf/globals/aws/programs/edt_handle_edt`), so match
+by substring to find the target.
 
 ## How to debug SDK issues?
 

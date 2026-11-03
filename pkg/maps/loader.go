@@ -24,6 +24,7 @@ import (
 
 	constdef "github.com/aws/aws-ebpf-sdk-go/pkg/constants"
 	"github.com/aws/aws-ebpf-sdk-go/pkg/logger"
+	"github.com/aws/aws-ebpf-sdk-go/pkg/metrics"
 	"github.com/aws/aws-ebpf-sdk-go/pkg/utils"
 	"golang.org/x/sys/unix"
 )
@@ -285,6 +286,59 @@ func (m *BpfMap) UnPinMap(pinPath string) error {
 	return unix.Close(int(fd))
 }
 
+// maxMapMutateAttempts bounds the TOTAL attempts at a map update: the initial
+// call plus at most maxMapMutateAttempts-1 retries.
+const maxMapMutateAttempts = 4
+
+// bpfMutateSyscall issues bpf(2) for a map mutation. It is a variable so a test
+// can drive a scripted errno sequence through the real map methods rather than
+// through a stand-in.
+var bpfMutateSyscall = func(cmd uintptr, attr unsafe.Pointer, size uintptr) (uintptr, unix.Errno) {
+	ret, _, errno := unix.Syscall(unix.SYS_BPF, cmd, uintptr(attr), size)
+	return ret, errno
+}
+
+// mutateWithRetry runs a map update syscall, retrying on ENOMEM.
+//
+// NO_PREALLOC hash elements (since v6.1) and LPM trie nodes (since v6.13,
+// commit 3d8dc43eb2a3) come from the BPF memory allocator. Its per-CPU free list
+// holds a single object when unit_size > 256 and is refilled by an irq_work
+// raised on the allocating CPU. unit_alloc() has no direct-allocation fallback,
+// so an insert needing two objects -- a leaf plus a new branch point -- can
+// return ENOMEM with memory free.
+//
+// The refill is asynchronous: #1129 measured the IPI landing ~715ns after it is
+// raised. An immediate retry therefore usually, but not always, finds a refilled
+// list, which is why this is a bounded retry and not a single one. It also relies
+// on staying on the CPU that raised the refill, since the irq_work runs only
+// there; back-to-back syscalls on one thread normally do. Introducing a sleep
+// between attempts would quietly break that and needs re-measuring first.
+//
+// A full map cannot spin here, because it reports a different errno: ENOSPC from
+// trie_update_elem for an LPM trie, E2BIG from alloc_htab_elem for a hash. The
+// one ENOMEM that is not this race is prealloc_lru_pop failing on an LRU hash,
+// which is genuine exhaustion; retries are bounded and sleepless, so that costs
+// at most three extra syscalls.
+//
+// See amazonlinux/amazon-linux-2023#1129 and aws/aws-network-policy-agent#686.
+func mutateWithRetry(op string, mutate func() (uintptr, unix.Errno)) (uintptr, unix.Errno) {
+	var ret uintptr
+	var errno unix.Errno
+	for attempt := 1; ; attempt++ {
+		ret, errno = mutate()
+		if errno != unix.ENOMEM {
+			return ret, errno
+		}
+		if attempt == maxMapMutateAttempts {
+			metrics.RecordMapMutateENOMEMExhausted()
+			log.Errorf("%s still ENOMEM after %d attempts, giving up", op, maxMapMutateAttempts)
+			return ret, errno
+		}
+		metrics.RecordMapMutateENOMEMRetry()
+		log.Infof("%s returned ENOMEM (attempt %d/%d), retrying", op, attempt, maxMapMutateAttempts)
+	}
+}
+
 func (m *BpfMap) CreateMapEntry(key, value uintptr) error {
 	return m.CreateUpdateMapEntry(key, value, uint64(constdef.BPF_NOEXIST))
 }
@@ -302,14 +356,13 @@ func (m *BpfMap) CreateUpdateMapEntry(key, value uintptr, updateFlags uint64) er
 		Key:   uint64(key),
 		Value: uint64(value),
 	}
-	ret, _, errno := unix.Syscall(
-		unix.SYS_BPF,
-		uintptr(constdef.BPF_MAP_UPDATE_ELEM),
-		uintptr(unsafe.Pointer(&attr)),
-		unsafe.Sizeof(attr),
-	)
-	runtime.KeepAlive(key)
-	runtime.KeepAlive(value)
+	ret, errno := mutateWithRetry("BPF_MAP_UPDATE_ELEM", func() (uintptr, unix.Errno) {
+		return bpfMutateSyscall(
+			uintptr(constdef.BPF_MAP_UPDATE_ELEM),
+			unsafe.Pointer(&attr),
+			unsafe.Sizeof(attr),
+		)
+	})
 
 	if updateFlags == uint64(constdef.BPF_NOEXIST) && errno == unix.EEXIST {
 		log.Infof("map entry already exists, cannot create duplicate")
@@ -318,7 +371,8 @@ func (m *BpfMap) CreateUpdateMapEntry(key, value uintptr, updateFlags uint64) er
 
 	if errno != 0 {
 		log.Errorf("unable to create/update map entry and ret %d and err %s", int(ret), errno)
-		return fmt.Errorf("unable to update map: %s", errno)
+		// %w so callers can classify with errors.Is
+		return fmt.Errorf("unable to update map: %w", errno)
 	}
 
 	log.Debugf("Create/Update map entry done with ret : %d", int(ret))
@@ -332,18 +386,58 @@ func (m *BpfMap) DeleteMapEntry(key uintptr) error {
 		MapFD: uint32(mapFD),
 		Key:   uint64(key),
 	}
-	ret, _, errno := unix.Syscall(
-		unix.SYS_BPF,
+	// Not retried: trie_delete_elem and htab_map_delete_elem never allocate, so
+	// a delete cannot hit the allocator race above. The only ENOMEM it can see
+	// is the key copy in map_delete_elem (kvmemdup_bpfptr), which is real memory
+	// pressure and will not clear within a few sleepless syscalls.
+	ret, errno := bpfMutateSyscall(
 		uintptr(constdef.BPF_MAP_DELETE_ELEM),
-		uintptr(unsafe.Pointer(&attr)),
+		unsafe.Pointer(&attr),
 		unsafe.Sizeof(attr),
 	)
 	if errno != 0 {
 		log.Errorf("unable to delete map entry and ret %d and err %s", int(ret), errno)
-		return fmt.Errorf("unable to update map: %s", errno)
+		return fmt.Errorf("unable to delete map entry: %w", errno)
 	}
 
 	log.Debugf("Delete map entry done with ret : %d", int(ret))
+	return nil
+}
+
+// UpdateProgArrayEntry writes progFD into the prog array at the given index.
+func (m *BpfMap) UpdateProgArrayEntry(index uint32, progFD int) error {
+	if m.MapMetaData.Type != constdef.BPF_MAP_TYPE_PROG_ARRAY.Index() {
+		return fmt.Errorf("UpdateProgArrayEntry: map %q is type %d, not BPF_MAP_TYPE_PROG_ARRAY", m.MapMetaData.Name, m.MapMetaData.Type)
+	}
+	if progFD < 0 {
+		return fmt.Errorf("UpdateProgArrayEntry: invalid program FD %d", progFD)
+	}
+
+	key := new(uint32)
+	*key = index
+	value := new(uint32)
+	*value = uint32(progFD)
+	err := m.CreateUpdateMapEntry(uintptr(unsafe.Pointer(key)), uintptr(unsafe.Pointer(value)), uint64(constdef.BPF_ANY))
+	runtime.KeepAlive(key)
+	runtime.KeepAlive(value)
+	if err != nil {
+		return fmt.Errorf("UpdateProgArrayEntry index %d: %w", index, err)
+	}
+	return nil
+}
+
+// DeleteProgArrayEntry removes the prog array entry at the given index.
+func (m *BpfMap) DeleteProgArrayEntry(index uint32) error {
+	if m.MapMetaData.Type != constdef.BPF_MAP_TYPE_PROG_ARRAY.Index() {
+		return fmt.Errorf("DeleteProgArrayEntry: map %q is type %d, not BPF_MAP_TYPE_PROG_ARRAY", m.MapMetaData.Name, m.MapMetaData.Type)
+	}
+	key := new(uint32)
+	*key = index
+	err := m.DeleteMapEntry(uintptr(unsafe.Pointer(key)))
+	runtime.KeepAlive(key)
+	if err != nil {
+		return fmt.Errorf("DeleteProgArrayEntry index %d: %w", index, err)
+	}
 	return nil
 }
 
@@ -614,9 +708,10 @@ func (m *BpfMap) GetMapFromPinPath(pinPath string) (BpfMapInfo, error) {
 
 	}
 
-	bpfMapInfo, err := GetBPFmapInfo(mapFD)
+	bpfMapInfo, err := mapInfoByFD(mapFD)
 	if err != nil {
 		log.Errorf("failed to get map Info for FD - %d", mapFD)
+		unix.Close(int(mapFD))
 		return bpfMapInfo, err
 	}
 	err = unix.Close(int(mapFD))
@@ -626,6 +721,9 @@ func (m *BpfMap) GetMapFromPinPath(pinPath string) (BpfMapInfo, error) {
 
 	return bpfMapInfo, nil
 }
+
+// mapInfoByFD is GetBPFmapInfo. Overridden in tests.
+var mapInfoByFD = GetBPFmapInfo
 
 func GetFirstMapEntryByID(nextKey uintptr, mapID int) error {
 	return GetNextMapEntryByID(uintptr(unsafe.Pointer(nil)), nextKey, mapID)

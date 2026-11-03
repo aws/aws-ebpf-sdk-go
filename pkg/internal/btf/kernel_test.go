@@ -15,6 +15,7 @@
 package btf
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -116,7 +117,12 @@ func TestKernelResolveUnknownKfunc(t *testing.T) {
 
 	before := countFDs(t)
 	_, err := r.ResolveKfuncs([]string{"no_such_kfunc"})
-	assert.ErrorContains(t, err, `kfunc "no_such_kfunc" not found`)
+	if errors.Is(err, errKernelBTFUnsupported) {
+		// Kernels before 5.11 fail the walk itself, before any lookup.
+		t.Log("kernel too old to read kernel BTF via bpf()")
+	} else {
+		assert.ErrorContains(t, err, `kfunc "no_such_kfunc" not found`)
+	}
 	// Nothing was found, so every fd opened during the walk is closed.
 	assert.Equal(t, before, countFDs(t))
 	assert.Empty(t, r.cache)
