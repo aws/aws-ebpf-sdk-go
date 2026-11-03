@@ -53,27 +53,17 @@ func New(interfacePrefix []string) BpfTc {
 
 }
 
-func enableQdisc(link netlink.Link) bool {
-	qdiscs, err := netlink.QdiscList(link)
-	if err != nil {
-		log.Infof("Unable to check qdisc hence try installing")
-		return true
+// clsact is shared, so one added by another TC user is not an error.
+func addClsact(attrs netlink.QdiscAttrs) error {
+	qdisc := &netlink.GenericQdisc{
+		QdiscAttrs: attrs,
+		QdiscType:  "clsact",
 	}
-
-	qdiscHandle := netlink.MakeHandle(constdef.QDISC_HANDLE, 0)
-	for _, qdisc := range qdiscs {
-		attrs := qdisc.Attrs()
-		if attrs.LinkIndex != link.Attrs().Index {
-			continue
-		}
-		if (attrs.Handle&qdiscHandle) == qdiscHandle && attrs.Parent == netlink.HANDLE_CLSACT {
-			log.Infof("Found qdisc hence don't install again")
-			return false
-		}
+	if err := netlink.QdiscAdd(qdisc); err != nil && !errors.Is(err, unix.EEXIST) {
+		log.Errorf("cannot add clsact qdisc: %v", err)
+		return err
 	}
-	log.Infof("Qdisc is not enabled hence install")
-	return true
-
+	return nil
 }
 
 func mismatchedInterfacePrefix(interfaceName string, interfacePrefix []string) error {
@@ -106,16 +96,8 @@ func (m *bpfTc) TCIngressAttach(interfaceName string, progFD int, funcName strin
 		Parent:    netlink.HANDLE_CLSACT,
 	}
 
-	if enableQdisc(intf) {
-		qdisc := &netlink.GenericQdisc{
-			QdiscAttrs: attrs,
-			QdiscType:  "clsact",
-		}
-
-		if err := netlink.QdiscAdd(qdisc); err != nil {
-			log.Errorf("cannot add clsact qdisc: %v", err)
-			return err
-		}
+	if err := addClsact(attrs); err != nil {
+		return err
 	}
 
 	// construct the filter
@@ -194,16 +176,8 @@ func (m *bpfTc) TCEgressAttach(interfaceName string, progFD int, funcName string
 		Parent:    netlink.HANDLE_CLSACT,
 	}
 
-	if enableQdisc(intf) {
-		qdisc := &netlink.GenericQdisc{
-			QdiscAttrs: attrs,
-			QdiscType:  "clsact",
-		}
-
-		if err := netlink.QdiscAdd(qdisc); err != nil {
-			log.Errorf("cannot add clsact qdisc: %v", err)
-			return err
-		}
+	if err := addClsact(attrs); err != nil {
+		return err
 	}
 
 	// construct the filter

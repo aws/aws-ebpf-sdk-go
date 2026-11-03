@@ -485,3 +485,27 @@ func TestNetLinkAPIs(t *testing.T) {
 		})
 	}
 }
+
+func TestAddClsactExisting(t *testing.T) {
+	if os.Getuid() != 0 {
+		t.Skip("Test requires root privileges.")
+	}
+
+	interfaceNames := []string{"foo"}
+	setupTest(interfaceNames, t)
+	defer teardownTest(interfaceNames, t)
+
+	intf, err := netlink.LinkByName("foo")
+	assert.NoError(t, err)
+	attrs := netlink.QdiscAttrs{
+		LinkIndex: intf.Attrs().Index,
+		Handle:    netlink.MakeHandle(constdef.QDISC_HANDLE, 0),
+		Parent:    netlink.HANDLE_CLSACT,
+	}
+
+	// Another TC user installs clsact first.
+	err = netlink.QdiscAdd(&netlink.GenericQdisc{QdiscAttrs: attrs, QdiscType: "clsact"})
+	assert.NoError(t, err)
+
+	assert.NoError(t, addClsact(attrs))
+}
