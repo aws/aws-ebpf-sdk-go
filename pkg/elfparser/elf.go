@@ -1258,9 +1258,9 @@ func (b *bpfSDKClient) RecoverGlobalMaps() (map[string]ebpf_maps.BpfMap, error) 
 				return err
 			}
 			if !fsinfo.IsDir() {
-				log.Infof("Dumping pinpaths - ", pinPath)
+				log.Infof("Dumping pinpaths - %s", pinPath)
 				if b.IsMapGlobal(pinPath) {
-					log.Infof("Found global pinpaths - ", pinPath)
+					log.Infof("Found global pinpaths - %s", pinPath)
 					bpfMapInfo, err := b.mapApi.GetMapFromPinPath(pinPath)
 					if err != nil {
 						log.Errorf("error getting mapInfo for Global pin path, this shouldn't happen")
@@ -1302,7 +1302,7 @@ func (b *bpfSDKClient) RecoverGlobalMaps() (map[string]ebpf_maps.BpfMap, error) 
 			}
 			return nil
 		}); err != nil {
-			log.Infof("Error walking bpf map directory:", err)
+			log.Infof("Error walking bpf map directory: %v", err)
 			return nil, fmt.Errorf("error walking the bpfdirectory %v", err)
 		}
 	} else {
@@ -1346,7 +1346,7 @@ func (b *bpfSDKClient) RecoverAllBpfProgramsAndMaps() (map[string]BpfData, error
 					return err
 				}
 				if !fsinfo.IsDir() {
-					log.Infof("Dumping pinpaths - ", pinPath)
+					log.Infof("Dumping pinpaths - %s", pinPath)
 
 					bpfMapInfo, err := b.mapApi.GetMapFromPinPath(pinPath)
 					if err != nil {
@@ -1376,7 +1376,7 @@ func (b *bpfSDKClient) RecoverAllBpfProgramsAndMaps() (map[string]BpfData, error
 				}
 				return nil
 			}); err != nil {
-				log.Infof("Error walking bpf map directory:", err)
+				log.Infof("Error walking bpf map directory: %v", err)
 				return nil, fmt.Errorf("failed walking the bpfdirectory %v", err)
 			}
 		}
@@ -1387,7 +1387,7 @@ func (b *bpfSDKClient) RecoverAllBpfProgramsAndMaps() (map[string]BpfData, error
 					return err
 				}
 				if !fsinfo.IsDir() {
-					log.Infof("Dumping pinpaths - ", pinPath)
+					log.Infof("Dumping pinpaths - %s", pinPath)
 
 					pgmData := ebpf_progs.BpfProgram{
 						PinPath: pinPath,
@@ -1472,7 +1472,7 @@ func (b *bpfSDKClient) RecoverAllBpfProgramsAndMaps() (map[string]BpfData, error
 				}
 				return nil
 			}); err != nil {
-				log.Infof("Error walking bpf prog directory:", err)
+				log.Infof("Error walking bpf prog directory: %v", err)
 				return nil, fmt.Errorf("failed walking the bpfdirectory %v", err)
 			}
 		}
@@ -1517,7 +1517,7 @@ func (b *bpfSDKClient) GetAllBpfProgramsAndMaps() (map[string]BpfData, error) {
 					return err
 				}
 				if !fsinfo.IsDir() {
-					log.Infof("Dumping pinpaths - ", pinPath)
+					log.Infof("Dumping pinpaths - %s", pinPath)
 
 					bpfMapInfo, err := b.mapApi.GetMapFromPinPath(pinPath)
 					if err != nil {
@@ -1535,7 +1535,7 @@ func (b *bpfSDKClient) GetAllBpfProgramsAndMaps() (map[string]BpfData, error) {
 				}
 				return nil
 			}); err != nil {
-				log.Infof("Error walking bpfdirectory:", err)
+				log.Infof("Error walking bpf directory: %v", err)
 				return nil, fmt.Errorf("failed walking the bpfdirectory %v", err)
 			}
 		}
@@ -1546,7 +1546,7 @@ func (b *bpfSDKClient) GetAllBpfProgramsAndMaps() (map[string]BpfData, error) {
 					return err
 				}
 				if !fsinfo.IsDir() {
-					log.Infof("Dumping pinpaths - ", pinPath)
+					log.Infof("Dumping pinpaths - %s", pinPath)
 
 					pgmData := ebpf_progs.BpfProgram{
 						PinPath: pinPath,
@@ -1619,7 +1619,7 @@ func (b *bpfSDKClient) GetAllBpfProgramsAndMaps() (map[string]BpfData, error) {
 				}
 				return nil
 			}); err != nil {
-				log.Infof("Error walking bpfdirectory:", err)
+				log.Infof("Error walking bpf directory: %v", err)
 				return nil, fmt.Errorf("failed walking the bpfdirectory %v", err)
 			}
 		}
