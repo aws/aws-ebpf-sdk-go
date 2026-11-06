@@ -708,15 +708,20 @@ func (m *BpfMap) GetMapFromPinPath(pinPath string) (BpfMapInfo, error) {
 
 	}
 
+	// Close the FD on every path after a successful open. Without this, an error
+	// from mapInfoByFD below returns and leaks the descriptor; during recovery
+	// the walk now continues past bad pins, so many failures could otherwise
+	// exhaust the process FD limit.
+	defer func() {
+		if closeErr := unix.Close(int(mapFD)); closeErr != nil {
+			log.Errorf("failed to close map FD %d for pin %s: %v", mapFD, pinPath, closeErr)
+		}
+	}()
+
 	bpfMapInfo, err := mapInfoByFD(mapFD)
 	if err != nil {
 		log.Errorf("failed to get map Info for FD - %d", mapFD)
-		unix.Close(int(mapFD))
 		return bpfMapInfo, err
-	}
-	err = unix.Close(int(mapFD))
-	if err != nil {
-		log.Infof("Failed to close but return the mapinfo")
 	}
 
 	return bpfMapInfo, nil

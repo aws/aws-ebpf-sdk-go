@@ -495,12 +495,22 @@ func BpfGetMapInfoFromProgInfo(progFD int, numMaps uint32) ([]ebpf_maps.BpfMapIn
 
 		bpfMapInfo, err := ebpf_maps.GetBPFmapInfo(mapfd)
 		if err != nil {
-			log.Errorf("failed to get map Info for FD", mapfd)
+			log.Errorf("failed to get map Info for FD %d: %v", mapfd, err)
+			// Close the temporary FD opened just above before bailing out.
+			if closeErr := unix.Close(mapfd); closeErr != nil {
+				log.Errorf("failed to close temporary map FD %d: %v", mapfd, closeErr)
+			}
 			return nil, nil, err
 		}
 
 		log.Infof("Closing map FD %d", mapfd)
-		unix.Close(mapfd)
+		if closeErr := unix.Close(mapfd); closeErr != nil {
+			// Not fatal - the info was read - but worth recording: this runs
+			// once per associated map of every program during a full walk, so
+			// a close that keeps failing is how recovery would approach the
+			// process FD limit.
+			log.Errorf("failed to close temporary map FD %d: %v", mapfd, closeErr)
+		}
 
 		loadedMaps = append(loadedMaps, bpfMapInfo)
 		loadedMapsIDs = append(loadedMapsIDs, int(associatedMaps[mapIdx]))
@@ -572,8 +582,13 @@ func (m *BpfProgram) GetProgFromPinPath(pinPath string) (BpfProgInfo, int, error
 	log.Infof("Got progFD - %d", progFD)
 	bpfProgInfo, err := progInfoByFD(progFD)
 	if err != nil {
-		log.Errorf("failed to get program Info for FD - %d", progFD)
-		unix.Close(progFD)
+		log.Errorf("failed to get program Info for FD %d: %v", progFD, err)
+		// We return -1 rather than progFD, so the caller has no handle to close.
+		// Close it here or the descriptor is unreachable for the life of the
+		// process. The pin keeps the program alive in the kernel.
+		if closeErr := unix.Close(progFD); closeErr != nil {
+			log.Errorf("failed to close prog FD %d: %v", progFD, closeErr)
+		}
 		return bpfProgInfo, -1, err
 	}
 
