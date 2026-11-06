@@ -26,6 +26,7 @@ import (
 	"github.com/aws/aws-ebpf-sdk-go/pkg/utils"
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"github.com/vishvananda/netlink"
 )
 
@@ -112,7 +113,8 @@ func TestTCXdpAttachDetach(t *testing.T) {
 	m.ebpf_progs.EXPECT().GetProgFromPinPath(gomock.Any()).AnyTimes()
 	m.ebpf_progs.EXPECT().GetBPFProgAssociatedMapsIDs(gomock.Any()).AnyTimes()
 
-	bpfSDKclient := elfparser.New(elfparser.Config{})
+	bpfSDKclient, newErr := elfparser.New(elfparser.Config{})
+	require.NoError(t, newErr)
 	progInfo, _, err := bpfSDKclient.LoadBpfFile(m.path, DUMMY_PROG_PREFIX)
 	if err != nil {
 		assert.NoError(t, err)
@@ -181,7 +183,8 @@ func TestNetLinkAPIs(t *testing.T) {
 			m.ebpf_progs.EXPECT().GetProgFromPinPath(gomock.Any()).AnyTimes()
 			m.ebpf_progs.EXPECT().GetBPFProgAssociatedMapsIDs(gomock.Any()).AnyTimes()
 
-			bpfSDKclient := elfparser.New(elfparser.Config{})
+			bpfSDKclient, newErr := elfparser.New(elfparser.Config{})
+			require.NoError(t, newErr)
 			progInfo, _, err := bpfSDKclient.LoadBpfFile(m.path, DUMMY_PROG_PREFIX)
 			if err != nil {
 				assert.NoError(t, err)

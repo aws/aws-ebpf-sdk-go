@@ -44,6 +44,29 @@ var testNamespacedMaps = []string{
 	"egress_pod_state_map", "cp_ingress_map", "cp_egress_map", "ipcache_map",
 }
 
+var testGlobalMaps = []string{"aws_conntrack_map", "policy_events"}
+
+const testGlobalPinPrefix = "global"
+
+// setOf builds the set form of a Config map-name list, the way New does.
+func setOf(names []string) map[string]struct{} {
+	set := make(map[string]struct{}, len(names))
+	for _, n := range names {
+		set[n] = struct{}{}
+	}
+	return set
+}
+
+// testClassifier builds the pin-path classifier the SDK would normally receive
+// from its caller via Config.
+func testClassifier() mapClassifier {
+	return mapClassifier{
+		namespacedMaps:  setOf(testNamespacedMaps),
+		globalMaps:      setOf(testGlobalMaps),
+		globalPinPrefix: testGlobalPinPrefix,
+	}
+}
+
 var (
 	MAP_SECTION_INDEX = 8
 	MAP_TYPE_1        = int(constdef.BPF_MAP_TYPE_LRU_HASH.Index())
@@ -127,7 +150,7 @@ func TestLoad(t *testing.T) {
 
 			elfFile, err := elf.NewFile(f)
 			assert.NoError(t, err)
-			elfLoader := newElfLoader(elfFile, m.ebpf_maps, m.ebpf_progs, "test", nil)
+			elfLoader := newElfLoader(elfFile, m.ebpf_maps, m.ebpf_progs, "test", testClassifier())
 			loadedProgs, loadedMaps, err := elfLoader.doLoadELF(BpfCustomData{})
 			assert.NoError(t, err)
 			assert.Equal(t, tt.wantProg, len(loadedProgs))
@@ -167,7 +190,7 @@ func TestParseSection(t *testing.T) {
 
 			elfFile, err := elf.NewFile(f)
 			assert.NoError(t, err)
-			elfLoader := newElfLoader(elfFile, m.ebpf_maps, m.ebpf_progs, "test", nil)
+			elfLoader := newElfLoader(elfFile, m.ebpf_maps, m.ebpf_progs, "test", testClassifier())
 
 			err = elfLoader.parseSection()
 			if tt.wantErr != nil {
@@ -209,7 +232,7 @@ func TestParseSection(t *testing.T) {
 
 			elfFile, err := elf.NewFile(f)
 			assert.NoError(t, err)
-			elfLoader := newElfLoader(elfFile, m.ebpf_maps, m.ebpf_progs, "test", nil)
+			elfLoader := newElfLoader(elfFile, m.ebpf_maps, m.ebpf_progs, "test", testClassifier())
 
 			err = elfLoader.parseSection()
 			if tt.wantErr != nil {
@@ -250,7 +273,7 @@ func TestParseSection(t *testing.T) {
 
 			elfFile, err := elf.NewFile(f)
 			assert.NoError(t, err)
-			elfLoader := newElfLoader(elfFile, m.ebpf_maps, m.ebpf_progs, "test", nil)
+			elfLoader := newElfLoader(elfFile, m.ebpf_maps, m.ebpf_progs, "test", testClassifier())
 
 			err = elfLoader.parseSection()
 			assert.NoError(t, err)
@@ -298,7 +321,7 @@ func TestParseSection(t *testing.T) {
 
 			elfFile, err := elf.NewFile(f)
 			assert.NoError(t, err)
-			elfLoader := newElfLoader(elfFile, m.ebpf_maps, m.ebpf_progs, "test", nil)
+			elfLoader := newElfLoader(elfFile, m.ebpf_maps, m.ebpf_progs, "test", testClassifier())
 
 			err = elfLoader.parseSection()
 			if tt.wantErr != nil {
@@ -348,7 +371,7 @@ func TestParseSection(t *testing.T) {
 
 			elfFile, err := elf.NewFile(f)
 			assert.NoError(t, err)
-			elfLoader := newElfLoader(elfFile, m.ebpf_maps, m.ebpf_progs, "test", nil)
+			elfLoader := newElfLoader(elfFile, m.ebpf_maps, m.ebpf_progs, "test", testClassifier())
 
 			err = elfLoader.parseSection()
 			if tt.wantErr != nil {
@@ -405,7 +428,7 @@ func TestParseMap(t *testing.T) {
 
 			elfFile, err := elf.NewFile(f)
 			assert.NoError(t, err)
-			elfLoader := newElfLoader(elfFile, m.ebpf_maps, m.ebpf_progs, "test", nil)
+			elfLoader := newElfLoader(elfFile, m.ebpf_maps, m.ebpf_progs, "test", testClassifier())
 
 			err = elfLoader.parseSection()
 			assert.NoError(t, err)
@@ -453,7 +476,7 @@ func TestParseMap(t *testing.T) {
 			var parsedMapData []int
 			elfFile, err := elf.NewFile(f)
 			assert.NoError(t, err)
-			elfLoader := newElfLoader(elfFile, m.ebpf_maps, m.ebpf_progs, "test", nil)
+			elfLoader := newElfLoader(elfFile, m.ebpf_maps, m.ebpf_progs, "test", testClassifier())
 
 			err = elfLoader.parseSection()
 			assert.NoError(t, err)
@@ -532,7 +555,7 @@ func TestParseProg(t *testing.T) {
 
 			elfFile, err := elf.NewFile(f)
 			assert.NoError(t, err)
-			elfLoader := newElfLoader(elfFile, m.ebpf_maps, m.ebpf_progs, "test", nil)
+			elfLoader := newElfLoader(elfFile, m.ebpf_maps, m.ebpf_progs, "test", testClassifier())
 
 			err = elfLoader.parseSection()
 			assert.NoError(t, err)
@@ -588,6 +611,7 @@ func TestRecovery(t *testing.T) {
 	progtests := []struct {
 		name          string
 		elfFileName   string
+		globalMaps    []string
 		wantMap       int
 		wantProg      int
 		recoverGlobal bool
@@ -595,8 +619,15 @@ func TestRecovery(t *testing.T) {
 		wantErr       error
 	}{
 		{
-			name:          "Recover Global maps",
-			elfFileName:   "../../test-data/test.map.bpf.elf",
+			name:        "Recover Global maps",
+			elfFileName: "../../test-data/test.map.bpf.elf",
+			// This fixture pins exactly one global map, aws_conntrack_map.
+			// RecoverGlobalMaps requires the configured set to be recovered in
+			// full, so Config must describe what this ELF actually pins -
+			// declaring the full testGlobalMaps here would (correctly) be
+			// reported as a partial recovery. See
+			// TestRecoverGlobalMapsRejectsPartialSet.
+			globalMaps:    []string{"aws_conntrack_map"},
 			wantMap:       1,
 			recoverGlobal: true,
 			wantErr:       nil,
@@ -615,7 +646,12 @@ func TestRecovery(t *testing.T) {
 			m := setup(t, tt.elfFileName)
 			defer m.ctrl.Finish()
 
-			bpfSDKclient := New(Config{NamespacedMaps: testNamespacedMaps})
+			globalMaps := testGlobalMaps
+			if tt.globalMaps != nil {
+				globalMaps = tt.globalMaps
+			}
+			bpfSDKclient, err := New(Config{NamespacedMaps: testNamespacedMaps, GlobalMaps: globalMaps, GlobalPinPrefix: testGlobalPinPrefix})
+			require.NoError(t, err)
 
 			if tt.recoverGlobal {
 				_, _, err := bpfSDKclient.LoadBpfFile(m.path, "global")
@@ -629,7 +665,10 @@ func TestRecovery(t *testing.T) {
 					assert.Equal(t, tt.wantMap, len(recoveredMaps))
 				}
 			} else {
-				_, _, err := bpfSDKclient.LoadBpfFile(m.path, "test")
+				// Pin with a "<podName>@<namespace>" identifier, matching the
+				// format the agent uses. Legacy "-" identifiers produce pins the
+				// recovery path deliberately skips as unparseable.
+				_, _, err := bpfSDKclient.LoadBpfFile(m.path, "test@default")
 				if err != nil {
 					assert.NoError(t, err)
 				}
@@ -642,6 +681,668 @@ func TestRecovery(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func closeBpfDataFDs(t *testing.T, programs map[string]BpfData, maps map[string]ebpf_maps.BpfMap) {
+	t.Helper()
+
+	fds := make(map[int]struct{})
+	for _, data := range programs {
+		if data.Program.ProgFD > 0 {
+			fds[data.Program.ProgFD] = struct{}{}
+		}
+		for _, bpfMap := range data.Maps {
+			if bpfMap.MapFD > 0 {
+				fds[int(bpfMap.MapFD)] = struct{}{}
+			}
+		}
+	}
+	for _, bpfMap := range maps {
+		if bpfMap.MapFD > 0 {
+			fds[int(bpfMap.MapFD)] = struct{}{}
+		}
+	}
+	for fd := range fds {
+		assert.NoError(t, unix.Close(fd))
+	}
+}
+
+func clearTestGlobalMapCache() {
+	for _, mapName := range testGlobalMaps {
+		sdkCache.Delete(mapName)
+	}
+}
+
+// TestRecoverGlobalMapsRejectsPartialSet covers the all-or-nothing contract on
+// RecoverGlobalMaps. The fixture pins only aws_conntrack_map while Config
+// declares policy_events too, so the walk succeeds on every pin it finds yet
+// still recovers an incomplete set.
+//
+// The rollback is the real subject: recovering aws_conntrack_map opens an FD and
+// publishes it to the process-global sdkCache, which the load path reads when
+// relocating a program against a global map. If the error returned here left
+// that entry behind, a caller reacting to the failure by recreating global state
+// would silently bind its new programs to the FD from the attempt that failed.
+func TestRecoverGlobalMapsRejectsPartialSet(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("requires root to load and recover BPF objects")
+	}
+	if !assert.NoError(t, utils.Mount_bpf_fs()) {
+		return
+	}
+	defer func() {
+		assert.NoError(t, utils.Unmount_bpf_fs())
+	}()
+
+	clearTestGlobalMapCache()
+	defer clearTestGlobalMapCache()
+
+	// testGlobalMaps declares aws_conntrack_map AND policy_events; this ELF
+	// pins only the former.
+	client, err := New(Config{
+		NamespacedMaps:  testNamespacedMaps,
+		GlobalMaps:      testGlobalMaps,
+		GlobalPinPrefix: testGlobalPinPrefix,
+	})
+	require.NoError(t, err)
+
+	_, loadedMaps, err := client.LoadBpfFile("../../test-data/test.map.bpf.elf", "global")
+	require.NoError(t, err)
+
+	// LoadBpfFile itself caches the global map it created, so drop that entry
+	// first: otherwise the assertion below cannot tell the load's cache entry
+	// from one the failed recovery left behind.
+	closeBpfDataFDs(t, nil, loadedMaps)
+	clearTestGlobalMapCache()
+
+	before := openFDCount(t)
+
+	recovered, err := client.RecoverGlobalMaps()
+
+	// Incomplete set => fatal, with no partial result handed back.
+	require.Error(t, err)
+	assert.Nil(t, recovered, "a partial global map set must not be returned")
+	assert.Contains(t, err.Error(), "policy_events", "the error should name the missing map")
+
+	// Rollback: the FD opened for aws_conntrack_map must be closed...
+	after := openFDCount(t)
+	assert.LessOrEqual(t, after, before,
+		"failed global recovery leaked FDs: before=%d after=%d", before, after)
+
+	// ...and its sdkCache entry removed, so a subsequent load cannot resolve a
+	// global map through the abandoned attempt.
+	for _, mapName := range testGlobalMaps {
+		_, cached := sdkCache.Get(mapName)
+		assert.False(t, cached, "sdkCache must not retain %q after a failed global recovery", mapName)
+	}
+}
+
+// TestRecoverGlobalMapsRecoversCompleteSet is the positive counterpart: with
+// Config describing exactly what the fixture pins, the same walk succeeds and
+// the global map stays cached for the load path to use.
+func TestRecoverGlobalMapsRecoversCompleteSet(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("requires root to load and recover BPF objects")
+	}
+	if !assert.NoError(t, utils.Mount_bpf_fs()) {
+		return
+	}
+	defer func() {
+		assert.NoError(t, utils.Unmount_bpf_fs())
+	}()
+
+	clearTestGlobalMapCache()
+	defer clearTestGlobalMapCache()
+
+	client, err := New(Config{
+		NamespacedMaps:  testNamespacedMaps,
+		GlobalMaps:      []string{"aws_conntrack_map"},
+		GlobalPinPrefix: testGlobalPinPrefix,
+	})
+	require.NoError(t, err)
+
+	_, loadedMaps, err := client.LoadBpfFile("../../test-data/test.map.bpf.elf", "global")
+	require.NoError(t, err)
+	closeBpfDataFDs(t, nil, loadedMaps)
+	clearTestGlobalMapCache()
+
+	recovered, err := client.RecoverGlobalMaps()
+	require.NoError(t, err)
+	assert.Len(t, recovered, 1)
+	defer closeBpfDataFDs(t, nil, recovered)
+
+	cachedFD, cached := sdkCache.Get("aws_conntrack_map")
+	assert.True(t, cached, "a successful recovery must leave the global map cached")
+	assert.Greater(t, cachedFD, 0)
+}
+
+func TestRecoverGlobalMapsWithMissingMapDirectory(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("requires root to mount bpffs")
+	}
+	if !assert.NoError(t, utils.Mount_bpf_fs()) {
+		return
+	}
+	defer func() {
+		assert.NoError(t, utils.Unmount_bpf_fs())
+	}()
+
+	if _, err := os.Stat(constdef.MAP_BPF_FS); err == nil {
+		t.Skip("test requires a fresh bpffs mount with no maps directory")
+	} else if !os.IsNotExist(err) {
+		require.NoError(t, err)
+	}
+
+	client, err := New(Config{
+		NamespacedMaps:  testNamespacedMaps,
+		GlobalMaps:      testGlobalMaps,
+		GlobalPinPrefix: testGlobalPinPrefix,
+	})
+	require.NoError(t, err)
+
+	recovered, err := client.RecoverGlobalMaps()
+	require.NoError(t, err)
+	assert.Empty(t, recovered)
+}
+
+func TestRecoverAllBpfProgramsAndMapsReturnsPartialResults(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("requires root to load and recover BPF objects")
+	}
+	if !assert.NoError(t, utils.Mount_bpf_fs()) {
+		return
+	}
+	defer func() {
+		assert.NoError(t, utils.Unmount_bpf_fs())
+	}()
+
+	// Prevent global-map FDs cached by another real-kernel test from changing
+	// which FD source this recovery exercises.
+	clearTestGlobalMapCache()
+	defer clearTestGlobalMapCache()
+
+	client, err := New(Config{
+		NamespacedMaps:  testNamespacedMaps,
+		GlobalMaps:      testGlobalMaps,
+		GlobalPinPrefix: testGlobalPinPrefix,
+	})
+	require.NoError(t, err)
+
+	// These BPF pins deliberately use the unsupported legacy filename format
+	// and sort before the valid pins below. Recovery must report them but
+	// continue walking and recover all later entries.
+	malformedPrograms, malformedMaps, err := client.LoadBpfFile(
+		"../../test-data/recoverydata.bpf.elf",
+		"aaa-legacy",
+	)
+	if !assert.NoError(t, err) {
+		return
+	}
+	closeBpfDataFDs(t, malformedPrograms, malformedMaps)
+
+	validPrograms, validMaps, err := client.LoadBpfFile(
+		"../../test-data/recoverydata.bpf.elf",
+		"zzz@default",
+	)
+	if !assert.NoError(t, err) {
+		return
+	}
+	closeBpfDataFDs(t, validPrograms, validMaps)
+
+	recovered, err := client.RecoverAllBpfProgramsAndMaps()
+	defer closeBpfDataFDs(t, recovered, nil)
+
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "partial recovery")
+	assert.Contains(t, err.Error(), "aaa-legacy")
+	assert.Equal(t, len(validPrograms), len(recovered))
+
+	for pinPath, expected := range validPrograms {
+		actual, ok := recovered[pinPath]
+		if !assert.True(t, ok, "valid program %s should be recovered", pinPath) {
+			continue
+		}
+		assert.NotZero(t, actual.Program.ProgFD)
+		assert.Equal(t, len(expected.Maps), len(actual.Maps))
+		for mapName := range expected.Maps {
+			recoveredMap, ok := actual.Maps[mapName]
+			assert.True(t, ok, "map %s for program %s should be recovered", mapName, pinPath)
+			if ok {
+				assert.NotZero(t, recoveredMap.MapFD)
+			}
+		}
+	}
+
+	for pinPath := range malformedPrograms {
+		assert.NotContains(t, recovered, pinPath)
+	}
+}
+
+// TestRecoverAllBpfProgramsAndMapsRecoversAllWorkloads exercises the all-success
+// path: when every pin on the node is valid and parseable, recovery must return
+// each workload's program together with all of its maps and a nil error. The
+// existing partial-recovery tests only cover the failure branches, so this
+// guards against the continue-and-aggregate logic spuriously reporting partial
+// recovery (or dropping a workload) when nothing actually failed.
+func TestRecoverAllBpfProgramsAndMapsRecoversAllWorkloads(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("requires root to load and recover BPF objects")
+	}
+	if !assert.NoError(t, utils.Mount_bpf_fs()) {
+		return
+	}
+	defer func() {
+		assert.NoError(t, utils.Unmount_bpf_fs())
+	}()
+
+	clearTestGlobalMapCache()
+	defer clearTestGlobalMapCache()
+
+	client, err := New(Config{
+		NamespacedMaps:  testNamespacedMaps,
+		GlobalMaps:      testGlobalMaps,
+		GlobalPinPrefix: testGlobalPinPrefix,
+	})
+	require.NoError(t, err)
+
+	// Two distinct workloads pinned with the "<podName>@<namespace>" identifier
+	// the agent uses. One pod name contains a dot converted to an underscore,
+	// which is the exact regression this PR fixes: the parser must still key the
+	// maps and programs under the correct identifier so both workloads recover.
+	firstPrograms, firstMaps, err := client.LoadBpfFile(
+		"../../test-data/recoverydata.bpf.elf",
+		"app_a@default",
+	)
+	if !assert.NoError(t, err) {
+		return
+	}
+	closeBpfDataFDs(t, firstPrograms, firstMaps)
+
+	secondPrograms, secondMaps, err := client.LoadBpfFile(
+		"../../test-data/recoverydata.bpf.elf",
+		"app-b@kube-system",
+	)
+	if !assert.NoError(t, err) {
+		return
+	}
+	closeBpfDataFDs(t, secondPrograms, secondMaps)
+
+	recovered, err := client.RecoverAllBpfProgramsAndMaps()
+	defer closeBpfDataFDs(t, recovered, nil)
+
+	// Everything was valid, so recovery must succeed cleanly - no partial error.
+	assert.NoError(t, err)
+	assert.Equal(t, len(firstPrograms)+len(secondPrograms), len(recovered))
+
+	for _, loaded := range []map[string]BpfData{firstPrograms, secondPrograms} {
+		for pinPath, expected := range loaded {
+			actual, ok := recovered[pinPath]
+			if !assert.True(t, ok, "program %s should be recovered", pinPath) {
+				continue
+			}
+			// A fresh FD must be handed back for every recovered program...
+			assert.NotZero(t, actual.Program.ProgFD)
+			// ...and every associated map, keyed by the same name, with a live FD.
+			assert.Equal(t, len(expected.Maps), len(actual.Maps))
+			for mapName := range expected.Maps {
+				recoveredMap, ok := actual.Maps[mapName]
+				if assert.True(t, ok, "map %s for program %s should be recovered", mapName, pinPath) {
+					assert.NotZero(t, recoveredMap.MapFD)
+				}
+			}
+		}
+	}
+}
+
+// TestRecoverAllBpfProgramsAndMapsWrapsErrPartialRecovery asserts the partial
+// failure is reported through the exported ErrPartialRecovery sentinel so
+// callers can distinguish "recovered some, skipped some" from a total failure
+// with errors.Is rather than by matching on the error string.
+func TestRecoverAllBpfProgramsAndMapsWrapsErrPartialRecovery(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("requires root to load and recover BPF objects")
+	}
+	if !assert.NoError(t, utils.Mount_bpf_fs()) {
+		return
+	}
+	defer func() {
+		assert.NoError(t, utils.Unmount_bpf_fs())
+	}()
+
+	clearTestGlobalMapCache()
+	defer clearTestGlobalMapCache()
+
+	client, err := New(Config{
+		NamespacedMaps:  testNamespacedMaps,
+		GlobalMaps:      testGlobalMaps,
+		GlobalPinPrefix: testGlobalPinPrefix,
+	})
+	require.NoError(t, err)
+
+	// A legacy "-"-format pin is unparseable by the "@"-anchored parser, so
+	// recovery skips it and records a partial-recovery error while still
+	// recovering the valid workload below.
+	legacyPrograms, legacyMaps, err := client.LoadBpfFile(
+		"../../test-data/recoverydata.bpf.elf",
+		"legacy-format",
+	)
+	if !assert.NoError(t, err) {
+		return
+	}
+	closeBpfDataFDs(t, legacyPrograms, legacyMaps)
+
+	validPrograms, validMaps, err := client.LoadBpfFile(
+		"../../test-data/recoverydata.bpf.elf",
+		"valid@default",
+	)
+	if !assert.NoError(t, err) {
+		return
+	}
+	closeBpfDataFDs(t, validPrograms, validMaps)
+
+	recovered, err := client.RecoverAllBpfProgramsAndMaps()
+	defer closeBpfDataFDs(t, recovered, nil)
+
+	// The valid workload is still returned alongside the error...
+	assert.Equal(t, len(validPrograms), len(recovered))
+	// ...and the error is the exported sentinel, matchable with errors.Is.
+	if assert.Error(t, err) {
+		assert.True(t, errors.Is(err, ErrPartialRecovery),
+			"partial recovery must wrap ErrPartialRecovery, got %v", err)
+	}
+}
+
+// TestRecoverAllBpfProgramsAndMapsSkipsUnparseableProgPin covers the program-walk
+// analog of the map-walk legacy-skip: a program pinned with the unsupported
+// legacy "-" identifier has no "@", so GetProgIdentifierFromBPFPinPath returns an
+// empty namespace and the pin must be skipped (recorded as partial recovery)
+// rather than registered under a truncated identifier. The existing tests only
+// exercise the map-side legacy skip and the missing-map drop, not a program pin
+// the parser cannot classify.
+func TestRecoverAllBpfProgramsAndMapsSkipsUnparseableProgPin(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("requires root to load and recover BPF objects")
+	}
+	if !assert.NoError(t, utils.Mount_bpf_fs()) {
+		return
+	}
+	defer func() {
+		assert.NoError(t, utils.Unmount_bpf_fs())
+	}()
+
+	clearTestGlobalMapCache()
+	defer clearTestGlobalMapCache()
+
+	client, err := New(Config{
+		NamespacedMaps:  testNamespacedMaps,
+		GlobalMaps:      testGlobalMaps,
+		GlobalPinPrefix: testGlobalPinPrefix,
+	})
+	require.NoError(t, err)
+
+	// "legacy-format" has no "@", so every program pinned from it
+	// ("legacy-format_handle_ingress", etc.) is unparseable to the "@"-anchored
+	// prog parser and must be skipped.
+	legacyPrograms, legacyMaps, err := client.LoadBpfFile(
+		"../../test-data/recoverydata.bpf.elf",
+		"legacy-format",
+	)
+	if !assert.NoError(t, err) {
+		return
+	}
+	closeBpfDataFDs(t, legacyPrograms, legacyMaps)
+
+	recovered, err := client.RecoverAllBpfProgramsAndMaps()
+	defer closeBpfDataFDs(t, recovered, nil)
+
+	if assert.Error(t, err) {
+		assert.True(t, errors.Is(err, ErrPartialRecovery),
+			"skipped prog pins must surface as ErrPartialRecovery, got %v", err)
+		assert.Contains(t, err.Error(), "unrecognized pin format")
+	}
+	// None of the unparseable program pins may be recovered.
+	for pinPath := range legacyPrograms {
+		assert.NotContains(t, recovered, pinPath)
+	}
+}
+
+// TestRecoverAllBpfProgramsAndMapsDoesNotLeakFDs verifies the deferred FD
+// reconciliation: map FDs opened during the map walk that are not carried out in
+// a returned program (because that program was dropped) must be closed before
+// the function returns. FD leaks in this path were raised repeatedly in review,
+// so this asserts the process-wide open-FD count does not grow across a recovery
+// that drops a workload.
+func TestRecoverAllBpfProgramsAndMapsDoesNotLeakFDs(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("requires root to load and recover BPF objects")
+	}
+	if !assert.NoError(t, utils.Mount_bpf_fs()) {
+		return
+	}
+	defer func() {
+		assert.NoError(t, utils.Unmount_bpf_fs())
+	}()
+
+	clearTestGlobalMapCache()
+	defer clearTestGlobalMapCache()
+
+	client, err := New(Config{
+		NamespacedMaps:  testNamespacedMaps,
+		GlobalMaps:      testGlobalMaps,
+		GlobalPinPrefix: testGlobalPinPrefix,
+	})
+	require.NoError(t, err)
+
+	loadedPrograms, loadedMaps, err := client.LoadBpfFile(
+		"../../test-data/recoverydata.bpf.elf",
+		"leaktest@default",
+	)
+	if !assert.NoError(t, err) {
+		return
+	}
+
+	// Leave the namespaced map pin in place and remove the PROGRAM pin that
+	// references it. The map walk then opens a fresh FD for ingress_map (it is
+	// namespaced, so it is not skipped as a global), but no recovered program
+	// references that map ID, so nothing in the returned data owns the FD and
+	// the deferred reconciliation in RecoverAllBpfProgramsAndMaps is the only
+	// thing that can close it.
+	//
+	// Removing the map pin instead would NOT exercise that defer: the map walk
+	// never sees a removed pin, so it never opens an FD, mapIDsToFDs stays
+	// empty, and the cleanup loop iterates zero times.
+	missingProgPin := constdef.PROG_BPF_FS + "leaktest@default_handle_ingress"
+	if !assert.NoError(t, os.Remove(missingProgPin)) {
+		closeBpfDataFDs(t, loadedPrograms, loadedMaps)
+		return
+	}
+	closeBpfDataFDs(t, loadedPrograms, loadedMaps)
+
+	before := openFDCount(t)
+
+	recovered, err := client.RecoverAllBpfProgramsAndMaps()
+	defer closeBpfDataFDs(t, recovered, nil)
+	// Every surviving pin recovers cleanly - the removed program pin is simply
+	// absent from the walk, which is not a per-pin failure.
+	assert.NoError(t, err)
+	assert.NotContains(t, recovered, missingProgPin)
+
+	after := openFDCount(t)
+
+	// Account only for FDs the caller now owns (returned programs + their maps).
+	// Any growth beyond those is a leaked handle the deferred cleanup missed.
+	owned := 0
+	for _, data := range recovered {
+		if data.Program.ProgFD > 0 {
+			owned++
+		}
+		for _, m := range data.Maps {
+			if m.MapFD > 0 {
+				owned++
+			}
+		}
+	}
+	// Exact bound, no slack: the ingress_map FD that recovery opened is owned by
+	// nothing in the result, so if the deferred cleanup is removed this grows by
+	// exactly one and the assertion fails.
+	assert.LessOrEqual(t, after, before+owned,
+		"recovery leaked FDs: before=%d after=%d owned-by-result=%d", before, after, owned)
+}
+
+// openFDCount returns the number of file descriptors currently open by this
+// process by counting entries in /proc/self/fd. It fails the test rather than
+// returning a sentinel, because a 0 here would make a before/after comparison
+// pass vacuously.
+func openFDCount(t *testing.T) int {
+	t.Helper()
+	entries, err := os.ReadDir("/proc/self/fd")
+	if err != nil {
+		t.Fatalf("read /proc/self/fd: %v", err)
+	}
+	return len(entries)
+}
+
+func TestRecoverAllBpfProgramsAndMapsDropsProgramWithMissingMap(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("requires root to load and recover BPF objects")
+	}
+	if !assert.NoError(t, utils.Mount_bpf_fs()) {
+		return
+	}
+	defer func() {
+		assert.NoError(t, utils.Unmount_bpf_fs())
+	}()
+
+	clearTestGlobalMapCache()
+	defer clearTestGlobalMapCache()
+
+	client, err := New(Config{
+		NamespacedMaps:  testNamespacedMaps,
+		GlobalMaps:      testGlobalMaps,
+		GlobalPinPrefix: testGlobalPinPrefix,
+	})
+	require.NoError(t, err)
+
+	loadedPrograms, loadedMaps, err := client.LoadBpfFile(
+		"../../test-data/recoverydata.bpf.elf",
+		"partial@default",
+	)
+	if !assert.NoError(t, err) {
+		return
+	}
+
+	// A pinned program retains its kernel reference to a map after the map pin
+	// is removed. Recovery can therefore still inspect handle_ingress and learn
+	// its map ID, but cannot recover that map from the map pin directory.
+	missingMapPin := constdef.MAP_BPF_FS + "partial@default_ingress_map"
+	if !assert.NoError(t, os.Remove(missingMapPin)) {
+		closeBpfDataFDs(t, loadedPrograms, loadedMaps)
+		return
+	}
+	closeBpfDataFDs(t, loadedPrograms, loadedMaps)
+
+	recovered, err := client.RecoverAllBpfProgramsAndMaps()
+	defer closeBpfDataFDs(t, recovered, nil)
+
+	missingProgramPin := constdef.PROG_BPF_FS + "partial@default_handle_ingress"
+	if assert.Error(t, err) {
+		assert.Contains(t, err.Error(), "partial recovery")
+		assert.Contains(t, err.Error(), missingProgramPin)
+		assert.Contains(t, err.Error(), "no recovered maps for partial@default")
+	}
+	assert.NotContains(t, recovered, missingProgramPin)
+	assert.Equal(t, len(loadedPrograms)-1, len(recovered))
+
+	for pinPath, expected := range loadedPrograms {
+		if pinPath == missingProgramPin {
+			continue
+		}
+		actual, ok := recovered[pinPath]
+		if !assert.True(t, ok, "program %s without the missing map should be recovered", pinPath) {
+			continue
+		}
+		assert.NotZero(t, actual.Program.ProgFD)
+		assert.Equal(t, len(expected.Maps), len(actual.Maps))
+	}
+}
+
+func TestGetAllBpfProgramsAndMapsOmitsMissingMapID(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("requires root to load and list BPF objects")
+	}
+	if !assert.NoError(t, utils.Mount_bpf_fs()) {
+		return
+	}
+	defer func() {
+		assert.NoError(t, utils.Unmount_bpf_fs())
+	}()
+
+	clearTestGlobalMapCache()
+	defer clearTestGlobalMapCache()
+
+	// Load two fixtures under the same workload identifier so mapPodSelector
+	// still contains the workload after the ingress_map pin is removed.
+	namespacedMaps := append([]string(nil), testNamespacedMaps...)
+	namespacedMaps = append(namespacedMaps, "test_events")
+	client, err := New(Config{
+		NamespacedMaps:  namespacedMaps,
+		GlobalMaps:      testGlobalMaps,
+		GlobalPinPrefix: testGlobalPinPrefix,
+	})
+	require.NoError(t, err)
+
+	const workload = "partial-listing@default"
+	loadedPrograms, loadedMaps, err := client.LoadBpfFile(
+		"../../test-data/recoverydata.bpf.elf",
+		workload,
+	)
+	if !assert.NoError(t, err) {
+		return
+	}
+
+	supportPrograms, supportMaps, err := client.LoadBpfFile(
+		"../../test-data/ring_buffer.bpf.elf",
+		workload,
+	)
+	if !assert.NoError(t, err) {
+		closeBpfDataFDs(t, loadedPrograms, loadedMaps)
+		return
+	}
+
+	missingMap, ok := loadedMaps["ingress_map"]
+	if !assert.True(t, ok, "fixture should load ingress_map") {
+		closeBpfDataFDs(t, loadedPrograms, loadedMaps)
+		closeBpfDataFDs(t, supportPrograms, supportMaps)
+		return
+	}
+	missingMapPin := constdef.MAP_BPF_FS + workload + "_ingress_map"
+	if !assert.NoError(t, os.Remove(missingMapPin)) {
+		closeBpfDataFDs(t, loadedPrograms, loadedMaps)
+		closeBpfDataFDs(t, supportPrograms, supportMaps)
+		return
+	}
+	closeBpfDataFDs(t, loadedPrograms, loadedMaps)
+	closeBpfDataFDs(t, supportPrograms, supportMaps)
+
+	listed, err := client.GetAllBpfProgramsAndMaps()
+	if assert.Error(t, err) {
+		assert.Contains(t, err.Error(), fmt.Sprintf("map ID %d", missingMap.MapID))
+	}
+
+	missingMapProgramPin := constdef.PROG_BPF_FS + workload + "_handle_ingress"
+	missingMapProgram, ok := listed[missingMapProgramPin]
+	if assert.True(t, ok, "program should remain listed when one associated map pin is missing") {
+		assert.NotContains(t, missingMapProgram.Maps, "",
+			"an unresolved map ID must not be inserted under an empty name")
+		assert.NotContains(t, missingMapProgram.Maps, "ingress_map")
+	}
+
+	// The second fixture's map proves the workload map table existed; the bug
+	// only appears when that table exists but lacks the specific map ID above.
+	supportProgramPin := constdef.PROG_BPF_FS + workload + "_conn_insert"
+	if supportProgram, ok := listed[supportProgramPin]; assert.True(t, ok) {
+		assert.Contains(t, supportProgram.Maps, "test_events")
 	}
 }
 
@@ -658,24 +1359,163 @@ func TestGetMapNameFromBPFPinPath(t *testing.T) {
 		{
 			name: "Ingress Map Pinpath",
 			args: args{
-				pinPath: "/sys/fs/bpf/globals/aws/maps/hello-udp-748dc8d996-default_ingress_map",
+				pinPath: "/sys/fs/bpf/globals/aws/maps/hello-udp-748dc8d996@default_ingress_map",
 			},
-			want: [2]string{"ingress_map", "hello-udp-748dc8d996-default"},
+			want: [2]string{"ingress_map", "hello-udp-748dc8d996@default"},
 		},
 		{
 			name: "Egress Map Pinpath",
 			args: args{
-				pinPath: "/sys/fs/bpf/globals/aws/maps/hello-udp-748dc8d996-default_egress_map",
+				pinPath: "/sys/fs/bpf/globals/aws/maps/hello-udp-748dc8d996@default_egress_map",
 			},
-			want: [2]string{"egress_map", "hello-udp-748dc8d996-default"},
+			want: [2]string{"egress_map", "hello-udp-748dc8d996@default"},
+		},
+		{
+			// Multi-segment map name: the boundary is the first "_" after the "@",
+			// so the whole "ingress_pod_state_map" must come back intact.
+			name: "Multi segment map name",
+			args: args{
+				pinPath: "/sys/fs/bpf/globals/aws/maps/hello-udp-748dc8d996@default_ingress_pod_state_map",
+			},
+			want: [2]string{"ingress_pod_state_map", "hello-udp-748dc8d996@default"},
+		},
+		{
+			name: "Cluster policy map name",
+			args: args{
+				pinPath: "/sys/fs/bpf/globals/aws/maps/hello-udp-748dc8d996@default_cp_egress_map",
+			},
+			want: [2]string{"cp_egress_map", "hello-udp-748dc8d996@default"},
+		},
+		{
+			// Pod names containing dots become underscores in the identifier, so
+			// the identifier itself contains underscores. Splitting on the FIRST
+			// underscore would truncate it - this is the regression case.
+			name: "Pod identifier containing underscores",
+			args: args{
+				pinPath: "/sys/fs/bpf/globals/aws/maps/my-app-1_2_3-abc1234-up-2026_01_0001@default_cp_egress_map",
+			},
+			want: [2]string{"cp_egress_map", "my-app-1_2_3-abc1234-up-2026_01_0001@default"},
+		},
+		{
+			name: "Global conntrack map",
+			args: args{
+				pinPath: "/sys/fs/bpf/globals/aws/maps/global_aws_conntrack_map",
+			},
+			want: [2]string{"aws_conntrack_map", "aws_conntrack_map"},
+		},
+		{
+			name: "Global policy events map",
+			args: args{
+				pinPath: "/sys/fs/bpf/globals/aws/maps/global_policy_events",
+			},
+			want: [2]string{"policy_events", "policy_events"},
+		},
+		{
+			// A namespace literally named "global" must not be mistaken for a
+			// global pin: the "@" branch matches first.
+			name: "Namespace named global",
+			args: args{
+				pinPath: "/sys/fs/bpf/globals/aws/maps/hello-udp-748dc8d996@global_ingress_map",
+			},
+			want: [2]string{"ingress_map", "hello-udp-748dc8d996@global"},
+		},
+		{
+			// Pre-"@" pin the one-shot legacy migration did not rename. It cannot
+			// be split unambiguously, so neither value is returned and the caller
+			// skips it rather than registering a truncated identifier.
+			name: "Legacy pin format is not guessed at",
+			args: args{
+				pinPath: "/sys/fs/bpf/globals/aws/maps/hello-udp-748dc8d996-default_ingress_map",
+			},
+			want: [2]string{"", ""},
+		},
+		{
+			// Legacy pin whose namespace happens to be "global" must also not be
+			// mistaken for a global pin - the prefix comparison is exact.
+			name: "Legacy pin with namespace named global",
+			args: args{
+				pinPath: "/sys/fs/bpf/globals/aws/maps/hello-udp-748dc8d996-global_ingress_map",
+			},
+			want: [2]string{"", ""},
+		},
+		{
+			// A pod named "global.abc" yields the identifier "global_abc@<ns>", so
+			// an unmigrated legacy pin for it starts with "global_". It must not be
+			// accepted as a global pin: the remainder is not a configured global map
+			// name.
+			name: "Legacy pin for a pod named global.abc",
+			args: args{
+				pinPath: "/sys/fs/bpf/globals/aws/maps/global_abc-default_ingress_map",
+			},
+			want: [2]string{"", ""},
+		},
+		{
+			// Same pod, migrated: the "@" branch handles it and the identifier keeps
+			// its underscore.
+			name: "Migrated pin for a pod named global.abc",
+			args: args{
+				pinPath: "/sys/fs/bpf/globals/aws/maps/global_abc@default_ingress_map",
+			},
+			want: [2]string{"ingress_map", "global_abc@default"},
+		},
+		{
+			name: "No separator at all",
+			args: args{
+				pinPath: "/sys/fs/bpf/globals/aws/maps/garbage",
+			},
+			want: [2]string{"", ""},
+		},
+		{
+			// Both separators present but no pod name. Splitting would yield the
+			// identifier "@default", under which recovery would register a real
+			// map - the wrong-key outcome the "@" anchoring exists to prevent.
+			name: "Empty pod name",
+			args: args{
+				pinPath: "/sys/fs/bpf/globals/aws/maps/@default_ingress_map",
+			},
+			want: [2]string{"", ""},
+		},
+		{
+			// Empty namespace: the identifier would be "pod@".
+			name: "Empty namespace",
+			args: args{
+				pinPath: "/sys/fs/bpf/globals/aws/maps/hello-udp-748dc8d996@_ingress_map",
+			},
+			want: [2]string{"", ""},
+		},
+		{
+			// Trailing "_" with nothing after it: strings.Cut reports ok, but the
+			// map name is empty, so the map would be registered under "".
+			name: "Empty map name",
+			args: args{
+				pinPath: "/sys/fs/bpf/globals/aws/maps/hello-udp-748dc8d996@default_",
+			},
+			want: [2]string{"", ""},
+		},
+		{
+			// Neither a pod name nor a namespace.
+			name: "Empty pod name and namespace",
+			args: args{
+				pinPath: "/sys/fs/bpf/globals/aws/maps/@_ingress_map",
+			},
+			want: [2]string{"", ""},
 		},
 	}
-	client := New(Config{NamespacedMaps: testNamespacedMaps}).(*bpfSDKClient)
+	clientIface, err := New(Config{NamespacedMaps: testNamespacedMaps, GlobalMaps: testGlobalMaps, GlobalPinPrefix: testGlobalPinPrefix})
+	require.NoError(t, err)
+	client := clientIface.(*bpfSDKClient)
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got1, got2 := client.GetMapNameFromBPFPinPath(tt.args.pinPath)
+			got1, got2, err := client.GetMapNameFromBPFPinPath(tt.args.pinPath)
 			assert.Equal(t, tt.want[0], got1)
 			assert.Equal(t, tt.want[1], got2)
+			// The error and the empty return must always agree: an empty map
+			// name means unparseable, and unparseable means a non-nil error.
+			if tt.want[0] == "" {
+				assert.Error(t, err, "an unparseable pin must report why")
+			} else {
+				assert.NoError(t, err)
+			}
 		})
 	}
 }
@@ -693,58 +1533,399 @@ func TestMapGlobal(t *testing.T) {
 		{
 			name: "Ingress Map",
 			args: args{
-				pinPath: "/sys/fs/bpf/globals/aws/maps/hello-udp-748dc8d996-default_ingress_map",
+				pinPath: "/sys/fs/bpf/globals/aws/maps/hello-udp-748dc8d996@default_ingress_map",
 			},
 			want: false,
 		},
 		{
 			name: "Egress Map",
 			args: args{
-				pinPath: "/sys/fs/bpf/globals/aws/maps/hello-udp-748dc8d996-default_egress_map",
+				pinPath: "/sys/fs/bpf/globals/aws/maps/hello-udp-748dc8d996@default_egress_map",
 			},
 			want: false,
 		},
 		{
-			name: "Global",
+			name: "Global conntrack map",
 			args: args{
-				pinPath: "/sys/fs/bpf/globals/aws/maps/test_global",
+				pinPath: "/sys/fs/bpf/globals/aws/maps/global_aws_conntrack_map",
+			},
+			want: true,
+		},
+		{
+			// An unparseable pin is neither namespaced nor global. It must not be
+			// reported as global, or RecoverGlobalMaps would pick it up and cache
+			// it under an empty name.
+			name: "Unparseable pin is not global",
+			args: args{
+				pinPath: "/sys/fs/bpf/globals/aws/maps/hello-udp-748dc8d996-default_ingress_map",
+			},
+			want: false,
+		},
+		{
+			// Carries the global prefix, but the map name is in neither
+			// configured list. This is the row that distinguishes the positive
+			// check (is the name in GlobalMaps?) from the old negative one (is
+			// the name absent from NamespacedMaps?) - under the latter this
+			// would be reported global.
+			name: "Global prefix with an unconfigured map name is not global",
+			args: args{
+				pinPath: "/sys/fs/bpf/globals/aws/maps/global_unknown_map",
+			},
+			want: false,
+		},
+		{
+			// Documents a pre-existing wart rather than asserting desired
+			// behaviour: classification consults only the map name and discards
+			// the pod identifier, so a per-pod pin whose map name happens to be
+			// a configured global name is reported global. Upstream behaves the
+			// same way. Pinned here so the next change to the classification has
+			// to decide about it deliberately.
+			name: "Per-pod pin with a global map name is reported global (identifier is ignored)",
+			args: args{
+				pinPath: "/sys/fs/bpf/globals/aws/maps/pod-abc@default_policy_events",
 			},
 			want: true,
 		},
 	}
-	client := New(Config{NamespacedMaps: testNamespacedMaps}).(*bpfSDKClient)
+	clientIface, err := New(Config{NamespacedMaps: testNamespacedMaps, GlobalMaps: testGlobalMaps, GlobalPinPrefix: testGlobalPinPrefix})
+	require.NoError(t, err)
+	client := clientIface.(*bpfSDKClient)
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := client.IsMapGlobal(tt.args.pinPath)
-			assert.Equal(t, tt.want, got)
+			// The same two steps RecoverGlobalMaps performs: parse the pin
+			// filename once, then classify by the resulting map name.
+			mapName, _, err := client.GetMapNameFromBPFPinPath(tt.args.pinPath)
+			if tt.want {
+				require.NoError(t, err, "a pin classified global must parse")
+			}
+			assert.Equal(t, tt.want, err == nil && client.isGlobalMap(mapName))
 		})
 	}
 }
 
-func TestMapClassifier(t *testing.T) {
-	mc := mapClassifier{
-		namespacedMaps: map[string]struct{}{
-			"ingress_map": {},
-			"egress_map":  {},
+func TestGetProgIdentifierFromBPFPinPath(t *testing.T) {
+	tests := []struct {
+		name           string
+		pinPath        string
+		wantIdentifier string
+		wantProgName   string
+		wantGlobal     bool
+	}{
+		{
+			name:           "Ingress prog",
+			pinPath:        "/sys/fs/bpf/globals/aws/programs/hello-udp-748dc8d996@default_handle_ingress",
+			wantIdentifier: "hello-udp-748dc8d996@default",
+			wantProgName:   "handle_ingress",
+		},
+		{
+			name:           "Egress prog",
+			pinPath:        "/sys/fs/bpf/globals/aws/programs/hello-udp-748dc8d996@default_handle_egress",
+			wantIdentifier: "hello-udp-748dc8d996@default",
+			wantProgName:   "handle_egress",
+		},
+		{
+			// The regression case: an identifier containing underscores, from a pod
+			// name that contained dots.
+			name:           "Pod identifier containing underscores",
+			pinPath:        "/sys/fs/bpf/globals/aws/programs/my-app-1_2_3-abc1234-up-2026_01_0001@default_handle_ingress",
+			wantIdentifier: "my-app-1_2_3-abc1234-up-2026_01_0001@default",
+			wantProgName:   "handle_ingress",
+		},
+		{
+			// A pod named "global.abcd" yields the identifier "global_abcd@<ns>",
+			// which starts with the global pin prefix but is a real pod. The "@"
+			// disambiguates it from a node-wide pin.
+			name:           "Pod whose name starts with global prefix is still a pod",
+			pinPath:        "/sys/fs/bpf/globals/aws/programs/global_abcd@default_handle_ingress",
+			wantIdentifier: "global_abcd@default",
+			wantProgName:   "handle_ingress",
+		},
+		{
+			// Legacy format with underscores in the identifier (from dot conversion)
+			// and the old "-" separator. Must not be parsed as the new "@" format.
+			name:    "Legacy format with underscores in identifier",
+			pinPath: "/sys/fs/bpf/globals/aws/programs/ylinux_app-75f4596489-k8s-omega-aws--nonprod-omega--test_handle_ingress",
+		},
+		{
+			name:         "Global prog is reported as global",
+			pinPath:      "/sys/fs/bpf/globals/aws/programs/global_handle_events",
+			wantProgName: "handle_events",
+			wantGlobal:   true,
+		},
+		{
+			name:           "Namespace named global is not a global prog",
+			pinPath:        "/sys/fs/bpf/globals/aws/programs/hello-udp-748dc8d996@global_handle_ingress",
+			wantIdentifier: "hello-udp-748dc8d996@global",
+			wantProgName:   "handle_ingress",
+		},
+		{
+			name:           "Legacy pin format is not guessed at",
+			pinPath:        "/sys/fs/bpf/globals/aws/programs/hello-udp-748dc8d996-default_handle_ingress",
+			wantIdentifier: "",
+			wantProgName:   "",
+			wantGlobal:     false,
+		},
+		{
+			// Must not panic: the old implementation indexed [1] after splitting
+			// into at most two parts.
+			name:           "No separator at all",
+			pinPath:        "/sys/fs/bpf/globals/aws/programs/garbage",
+			wantIdentifier: "",
+			wantProgName:   "",
+			wantGlobal:     false,
+		},
+		{
+			// "@" present but no "_" after it: there is no prog name to split
+			// off, so the dedicated early return fires rather than the pin
+			// falling through to the global branch.
+			name:           "Identifier with no prog name after the namespace",
+			pinPath:        "/sys/fs/bpf/globals/aws/programs/hello-udp-748dc8d996@default",
+			wantIdentifier: "",
+			wantProgName:   "",
+			wantGlobal:     false,
+		},
+		{
+			// The known limitation documented on GetProgIdentifierFromBPFPinPath:
+			// a legacy (pre-"@") pin for a pod whose name begins with the global
+			// prefix has no "@" and a first segment equal to the prefix, so it is
+			// classified global and skipped rather than recovered. Pinned here so
+			// the behaviour is visible rather than merely described in a comment -
+			// the same pod's MAP pin returns ("","") and is reported through
+			// ErrPartialRecovery, while this one is only logged.
+			name:           "Legacy pin for a pod named global.foo is classified global",
+			pinPath:        "/sys/fs/bpf/globals/aws/programs/global_foo-default_handle_ingress",
+			wantIdentifier: "",
+			wantProgName:   "foo-default_handle_ingress",
+			wantGlobal:     true,
+		},
+		{
+			// Unexpected path depth should still parse correctly (only the
+			// basename matters).
+			name:           "Unexpected path depth",
+			pinPath:        "/tmp/hello-udp-748dc8d996@default_handle_ingress",
+			wantIdentifier: "hello-udp-748dc8d996@default",
+			wantProgName:   "handle_ingress",
+		},
+		{
+			// An unrecognized suffix that doesn't match handle_ingress or
+			// handle_egress. The function still parses it — it doesn't validate
+			// the prog name, just splits on the format boundary.
+			name:           "Unrecognized prog name suffix still parsed",
+			pinPath:        "/sys/fs/bpf/globals/aws/programs/hello-udp-748dc8d996@default_handle_unknown",
+			wantIdentifier: "hello-udp-748dc8d996@default",
+			wantProgName:   "handle_unknown",
+		},
+		{
+			// Both separators present but no pod name. The identifier would be
+			// "@default", under which recovery would key a real program.
+			name:    "Empty pod name",
+			pinPath: "/sys/fs/bpf/globals/aws/programs/@default_handle_ingress",
+		},
+		{
+			// Empty namespace: the identifier would be "hello-udp-748dc8d996@".
+			name:    "Empty namespace",
+			pinPath: "/sys/fs/bpf/globals/aws/programs/hello-udp-748dc8d996@_handle_ingress",
+		},
+		{
+			// Trailing "_": strings.Cut reports ok but the prog name is empty.
+			name:    "Empty prog name",
+			pinPath: "/sys/fs/bpf/globals/aws/programs/hello-udp-748dc8d996@default_",
+		},
+		{
+			// A bare "<globalPinPrefix>_" has no prog name, so it is reported as
+			// unrecognized rather than as a global prog with an empty name.
+			name:    "Global prefix with empty prog name is not global",
+			pinPath: "/sys/fs/bpf/globals/aws/programs/global_",
 		},
 	}
 
+	clientIface, err := New(Config{NamespacedMaps: testNamespacedMaps, GlobalMaps: testGlobalMaps, GlobalPinPrefix: testGlobalPinPrefix})
+	require.NoError(t, err)
+	client := clientIface.(*bpfSDKClient)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotIdentifier, gotProgName, gotGlobal, err := client.GetProgIdentifierFromBPFPinPath(tt.pinPath)
+			assert.Equal(t, tt.wantIdentifier, gotIdentifier)
+			assert.Equal(t, tt.wantProgName, gotProgName)
+			assert.Equal(t, tt.wantGlobal, gotGlobal)
+			// A pin that yields neither an identifier nor a global prog name is
+			// unparseable, and must say why.
+			if tt.wantIdentifier == "" && !tt.wantGlobal {
+				assert.Error(t, err, "an unparseable pin must report why")
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
+// TestNewRejectsInvalidConfig pins the Config validation New performs. Both
+// rejected shapes are configurations that cannot classify the pins they
+// describe, and whose only other symptom is unrecovered workloads after a
+// restart - so the constructor is the last place they can be caught cheaply.
+func TestNewRejectsInvalidConfig(t *testing.T) {
+	tests := []struct {
+		name    string
+		cfg     Config
+		wantErr string
+	}{
+		{
+			// The documented Config invariant: exactly one list per map name.
+			// An overlapping name is classified global by isGlobalMap, so the
+			// map's per-pod pins are never recovered.
+			name: "map in both NamespacedMaps and GlobalMaps",
+			cfg: Config{
+				NamespacedMaps:  []string{"ingress_map", "policy_events"},
+				GlobalMaps:      []string{"policy_events"},
+				GlobalPinPrefix: testGlobalPinPrefix,
+			},
+			wantErr: `"policy_events" is in both`,
+		},
+		{
+			// A global pin is matched as "<prefix>_<mapName>", so declaring
+			// global maps without a prefix declares maps that can never match.
+			name: "GlobalMaps set with no GlobalPinPrefix",
+			cfg: Config{
+				NamespacedMaps: testNamespacedMaps,
+				GlobalMaps:     testGlobalMaps,
+			},
+			wantErr: "GlobalPinPrefix is empty",
+		},
+		{
+			name: "fully configured",
+			cfg: Config{
+				NamespacedMaps:  testNamespacedMaps,
+				GlobalMaps:      testGlobalMaps,
+				GlobalPinPrefix: testGlobalPinPrefix,
+			},
+		},
+		{
+			// An empty Config is valid: a caller that pins no global maps has
+			// nothing to classify as global. The kprobe, tc and xdp tests
+			// construct the SDK this way, so this must not become an error.
+			name: "empty config",
+			cfg:  Config{},
+		},
+		{
+			// A prefix with no global map names is not a contradiction - the
+			// prefix simply never matches, because the exact-name check fails.
+			// Only the reverse combination is rejected.
+			name: "GlobalPinPrefix set with no GlobalMaps",
+			cfg: Config{
+				NamespacedMaps:  testNamespacedMaps,
+				GlobalPinPrefix: testGlobalPinPrefix,
+			},
+		},
+		{
+			name: "namespaced maps only",
+			cfg:  Config{NamespacedMaps: testNamespacedMaps},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client, err := New(tt.cfg)
+			if tt.wantErr != "" {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.wantErr)
+				// A rejected Config must not also hand back a usable client:
+				// a caller that ignores the error would otherwise run on a
+				// configuration the SDK has already declared unworkable.
+				assert.Nil(t, client)
+				return
+			}
+			require.NoError(t, err)
+			assert.NotNil(t, client)
+		})
+	}
+}
+
+// TestNewBuildsClassifierFromConfig checks that an accepted Config is actually
+// carried into the classifier, so validation passing does not mask a Config
+// that was parsed into the wrong fields.
+func TestNewBuildsClassifierFromConfig(t *testing.T) {
+	clientIface, err := New(Config{
+		NamespacedMaps:  testNamespacedMaps,
+		GlobalMaps:      testGlobalMaps,
+		GlobalPinPrefix: testGlobalPinPrefix,
+	})
+	require.NoError(t, err)
+	mc := clientIface.(*bpfSDKClient).mapClassifier
+
+	assert.Equal(t, testGlobalPinPrefix, mc.globalPinPrefix)
+	assert.Equal(t, setOf(testNamespacedMaps), mc.namespacedMaps)
+	assert.Equal(t, setOf(testGlobalMaps), mc.globalMaps)
+
+	// Spot-check both axes through the exported behaviour rather than only the
+	// field contents.
+	assert.True(t, mc.isGlobalMap("policy_events"))
+	assert.False(t, mc.isGlobalMap("ingress_map"))
 	assert.True(t, mc.isNamespacedMap("ingress_map"))
 	assert.False(t, mc.isNamespacedMap("policy_events"))
+}
 
-	name, ns := mc.GetMapNameFromBPFPinPath("/sys/fs/bpf/globals/aws/maps/pod-abc-default_ingress_map")
+func TestMapClassifier(t *testing.T) {
+	// Build the classifier the way New does, rather than hand-assembling the
+	// sets, so this test keeps testing the SDK instead of its own fixture.
+	mcIface, err := New(Config{
+		NamespacedMaps:  testNamespacedMaps,
+		GlobalMaps:      testGlobalMaps,
+		GlobalPinPrefix: testGlobalPinPrefix,
+	})
+	require.NoError(t, err)
+	mc := mcIface.(*bpfSDKClient).mapClassifier
+
+	// Per-pod pins use the "<podName>@<namespace>_<mapName>" format.
+	name, ns, err := mc.GetMapNameFromBPFPinPath("/sys/fs/bpf/globals/aws/maps/pod-abc@default_ingress_map")
+	assert.NoError(t, err)
 	assert.Equal(t, "ingress_map", name)
-	assert.Equal(t, "pod-abc-default", ns)
+	assert.Equal(t, "pod-abc@default", ns)
 
-	name, ns = mc.GetMapNameFromBPFPinPath("/sys/fs/bpf/globals/aws/maps/global_policy_events")
+	// Global pins are "<globalPinPrefix>_<mapName>" with a configured global map name.
+	name, ns, err = mc.GetMapNameFromBPFPinPath("/sys/fs/bpf/globals/aws/maps/global_policy_events")
+	assert.NoError(t, err)
 	assert.Equal(t, "policy_events", name)
 	assert.Equal(t, "policy_events", ns)
 
-	assert.False(t, mc.IsMapGlobal("/sys/fs/bpf/globals/aws/maps/pod-abc-default_ingress_map"))
-	assert.True(t, mc.IsMapGlobal("/sys/fs/bpf/globals/aws/maps/global_policy_events"))
+	// An "@" with no "_" after it has no map name to split off, so the pin is
+	// unparseable rather than being handed to the global branch.
+	name, ns, err = mc.GetMapNameFromBPFPinPath("/sys/fs/bpf/globals/aws/maps/pod-abc@default")
+	assert.Empty(t, name, "a pin with no map name after the namespace must not parse")
+	assert.Empty(t, ns)
+	if assert.Error(t, err) {
+		assert.Contains(t, err.Error(), "no map name after the namespace",
+			"the error should name the specific defect, not just 'unparseable'")
+	}
 
-	empty := mapClassifier{namespacedMaps: map[string]struct{}{}}
-	assert.True(t, empty.IsMapGlobal("/sys/fs/bpf/globals/aws/maps/pod-abc-default_ingress_map"))
+	// Config fields are consumed independently: an unset GlobalPinPrefix alone
+	// is enough to stop a "global_"-prefixed pin from parsing. New now rejects
+	// that combination outright (see TestNewRejectsInvalidConfig), so the
+	// classifier is built directly here - the point of this case is the parser
+	// behaviour the rejection exists to prevent, which must stay pinned
+	// independently of the constructor's validation.
+	noPrefix := mapClassifier{
+		namespacedMaps:  setOf(testNamespacedMaps),
+		globalMaps:      setOf(testGlobalMaps),
+		globalPinPrefix: "",
+	}
+	name, _, err = noPrefix.GetMapNameFromBPFPinPath("/sys/fs/bpf/globals/aws/maps/global_policy_events")
+	assert.Empty(t, name, "global pin must not parse when GlobalPinPrefix is unset")
+	assert.Error(t, err)
+	// The empty name an unparseable pin yields must not classify as global.
+	assert.False(t, noPrefix.isGlobalMap(name))
+
+	// And with the prefix set but no global map names configured, the pin
+	// parses no further either - a distinct cause from the case above.
+	noGlobalsIface, err := New(Config{
+		NamespacedMaps:  testNamespacedMaps,
+		GlobalPinPrefix: testGlobalPinPrefix,
+	})
+	require.NoError(t, err)
+	noGlobals := noGlobalsIface.(*bpfSDKClient).mapClassifier
+	name, _, err = noGlobals.GetMapNameFromBPFPinPath("/sys/fs/bpf/globals/aws/maps/global_policy_events")
+	assert.Empty(t, name, "global pin must not parse when GlobalMaps is empty")
+	assert.Error(t, err)
+	assert.False(t, noGlobals.isGlobalMap(name))
 }
 
 func TestProgType(t *testing.T) {
@@ -895,7 +2076,7 @@ func TestSubprogramParseProg(t *testing.T) {
 
 	elfFile, err := elf.NewFile(f)
 	assert.NoError(t, err)
-	elfLoader := newElfLoader(elfFile, m.ebpf_maps, m.ebpf_progs, "test", nil)
+	elfLoader := newElfLoader(elfFile, m.ebpf_maps, m.ebpf_progs, "test", testClassifier())
 
 	err = elfLoader.parseSection()
 	assert.NoError(t, err)
@@ -958,7 +2139,7 @@ func TestChainedSubprogramParseProg(t *testing.T) {
 
 	elfFile, err := elf.NewFile(f)
 	assert.NoError(t, err)
-	elfLoader := newElfLoader(elfFile, m.ebpf_maps, m.ebpf_progs, "test", nil)
+	elfLoader := newElfLoader(elfFile, m.ebpf_maps, m.ebpf_progs, "test", testClassifier())
 
 	err = elfLoader.parseSection()
 	assert.NoError(t, err)
@@ -1098,7 +2279,7 @@ func TestMultiProgramOneSectionParseProg(t *testing.T) {
 
 	elfFile, err := elf.NewFile(f)
 	assert.NoError(t, err)
-	elfLoader := newElfLoader(elfFile, m.ebpf_maps, m.ebpf_progs, "test", nil)
+	elfLoader := newElfLoader(elfFile, m.ebpf_maps, m.ebpf_progs, "test", testClassifier())
 
 	err = elfLoader.parseSection()
 	assert.NoError(t, err)
@@ -1175,7 +2356,7 @@ func TestMultiProgramOneSectionWithSubprogRejected(t *testing.T) {
 
 	elfFile, err := elf.NewFile(f)
 	assert.NoError(t, err)
-	elfLoader := newElfLoader(elfFile, m.ebpf_maps, m.ebpf_progs, "test", nil)
+	elfLoader := newElfLoader(elfFile, m.ebpf_maps, m.ebpf_progs, "test", testClassifier())
 
 	err = elfLoader.parseSection()
 	assert.NoError(t, err)
@@ -1216,7 +2397,7 @@ func TestMultiSubprogramWithDistinctSubprogsRejected(t *testing.T) {
 
 	elfFile, err := elf.NewFile(f)
 	assert.NoError(t, err)
-	elfLoader := newElfLoader(elfFile, m.ebpf_maps, m.ebpf_progs, "test", nil)
+	elfLoader := newElfLoader(elfFile, m.ebpf_maps, m.ebpf_progs, "test", testClassifier())
 
 	assert.NoError(t, elfLoader.parseSection())
 
@@ -1255,7 +2436,7 @@ func TestTextOnlyMapAssociation(t *testing.T) {
 
 	elfFile, err := elf.NewFile(f)
 	assert.NoError(t, err)
-	elfLoader := newElfLoader(elfFile, m.ebpf_maps, m.ebpf_progs, "test", nil)
+	elfLoader := newElfLoader(elfFile, m.ebpf_maps, m.ebpf_progs, "test", testClassifier())
 
 	assert.NoError(t, elfLoader.parseSection())
 	assert.NotNil(t, elfLoader.textSection)
@@ -1305,7 +2486,7 @@ func TestSubprogramNoMapRelocation(t *testing.T) {
 
 	elfFile, err := elf.NewFile(f)
 	assert.NoError(t, err)
-	elfLoader := newElfLoader(elfFile, m.ebpf_maps, m.ebpf_progs, "test", nil)
+	elfLoader := newElfLoader(elfFile, m.ebpf_maps, m.ebpf_progs, "test", testClassifier())
 
 	assert.NoError(t, elfLoader.parseSection())
 	assert.NotNil(t, elfLoader.textSection)
@@ -1362,7 +2543,7 @@ func TestSubprogramGlobalMapRelocation(t *testing.T) {
 
 	elfFile, err := elf.NewFile(f)
 	assert.NoError(t, err)
-	elfLoader := newElfLoader(elfFile, m.ebpf_maps, m.ebpf_progs, "", nil)
+	elfLoader := newElfLoader(elfFile, m.ebpf_maps, m.ebpf_progs, "", testClassifier())
 
 	assert.NoError(t, elfLoader.parseSection())
 	assert.NotNil(t, elfLoader.reloSectionMap[uint32(elfLoader.textSectionIndex)],
@@ -1462,7 +2643,8 @@ func TestSubprogramRealKernelLoad(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			client := New(Config{NamespacedMaps: testNamespacedMaps})
+			client, err := New(Config{NamespacedMaps: testNamespacedMaps, GlobalMaps: testGlobalMaps, GlobalPinPrefix: testGlobalPinPrefix})
+			require.NoError(t, err)
 			progs, maps, err := client.LoadBpfFile(tt.elf, tt.pinPrefix)
 			// Best-effort cleanup of the pins this load created.
 			defer func() {
@@ -1509,7 +2691,7 @@ func TestSubprogramInCustomSectionRejected(t *testing.T) {
 
 	elfFile, err := elf.NewFile(f)
 	assert.NoError(t, err)
-	elfLoader := newElfLoader(elfFile, m.ebpf_maps, m.ebpf_progs, "test", nil)
+	elfLoader := newElfLoader(elfFile, m.ebpf_maps, m.ebpf_progs, "test", testClassifier())
 	assert.NoError(t, elfLoader.parseSection())
 
 	mapData, err := elfLoader.parseMap(BpfCustomData{})
@@ -1558,7 +2740,7 @@ func parseKfuncELF(t *testing.T, path string, resolver btf.KfuncResolver) (map[s
 
 	elfFile, err := elf.NewFile(f)
 	assert.NoError(t, err)
-	elfLoader := newElfLoader(elfFile, m.ebpf_maps, m.ebpf_progs, "test", nil)
+	elfLoader := newElfLoader(elfFile, m.ebpf_maps, m.ebpf_progs, "test", mapClassifier{})
 	elfLoader.kfuncResolver = resolver
 	assert.NoError(t, elfLoader.parseSection())
 
@@ -1692,7 +2874,7 @@ func TestNoKfuncsSkipsResolver(t *testing.T) {
 
 	elfFile, err := elf.NewFile(f)
 	assert.NoError(t, err)
-	elfLoader := newElfLoader(elfFile, m.ebpf_maps, m.ebpf_progs, "test", nil)
+	elfLoader := newElfLoader(elfFile, m.ebpf_maps, m.ebpf_progs, "test", mapClassifier{})
 	resolver := &fakeKfuncResolver{err: errors.New("must not be called")}
 	elfLoader.kfuncResolver = resolver
 	assert.NoError(t, elfLoader.parseSection())
@@ -1840,7 +3022,7 @@ func TestLoadFailureReleasesCreatedObjects(t *testing.T) {
 			if tt.namespaced != nil {
 				namespaced = tt.namespaced
 			}
-			loader := newElfLoader(elfFile, m.ebpf_maps, m.ebpf_progs, prefix, namespaced)
+			loader := newElfLoader(elfFile, m.ebpf_maps, m.ebpf_progs, prefix, mapClassifier{namespacedMaps: namespaced})
 
 			progs, maps, err := loader.doLoadELF(BpfCustomData{})
 			assert.Error(t, err)
@@ -1882,7 +3064,7 @@ func TestLoadSuccessReleasesNothing(t *testing.T) {
 	defer f.Close()
 	elfFile, err := elf.NewFile(f)
 	assert.NoError(t, err)
-	loader := newElfLoader(elfFile, m.ebpf_maps, m.ebpf_progs, "test", map[string]struct{}{"ingress_map": {}})
+	loader := newElfLoader(elfFile, m.ebpf_maps, m.ebpf_progs, "test", mapClassifier{namespacedMaps: map[string]struct{}{"ingress_map": {}}})
 
 	_, _, err = loader.doLoadELF(BpfCustomData{})
 	assert.NoError(t, err)
@@ -1940,7 +3122,7 @@ func TestLoadFailureReleasesRealKernelObjects(t *testing.T) {
 	defer f.Close()
 	elfFile, err := elf.NewFile(f)
 	assert.NoError(t, err)
-	loader := newElfLoader(elfFile, &ebpf_maps.BpfMap{}, mockBpfProgAPI, "rk_release", map[string]struct{}{"ingress_map": {}})
+	loader := newElfLoader(elfFile, &ebpf_maps.BpfMap{}, mockBpfProgAPI, "rk_release", mapClassifier{namespacedMaps: map[string]struct{}{"ingress_map": {}}})
 
 	_, _, err = loader.doLoadELF(BpfCustomData{})
 	assert.ErrorContains(t, err, "injected")
@@ -1986,7 +3168,7 @@ func TestLoadFailureKeepsReplacedPin(t *testing.T) {
 	defer f.Close()
 	elfFile, err := elf.NewFile(f)
 	assert.NoError(t, err)
-	loader := newElfLoader(elfFile, &ebpf_maps.BpfMap{}, mockBpfProgAPI, "rk_replaced", map[string]struct{}{"ingress_map": {}})
+	loader := newElfLoader(elfFile, &ebpf_maps.BpfMap{}, mockBpfProgAPI, "rk_replaced", mapClassifier{namespacedMaps: map[string]struct{}{"ingress_map": {}}})
 
 	_, _, err = loader.doLoadELF(BpfCustomData{})
 	assert.ErrorContains(t, err, "injected")
@@ -2064,7 +3246,7 @@ func TestLoadFailureReleasesRealKernelPrograms(t *testing.T) {
 	defer f.Close()
 	elfFile, err := elf.NewFile(f)
 	assert.NoError(t, err)
-	loader := newElfLoader(elfFile, &ebpf_maps.BpfMap{}, progAPI, "rk_progfail", map[string]struct{}{"ingress_map": {}})
+	loader := newElfLoader(elfFile, &ebpf_maps.BpfMap{}, progAPI, "rk_progfail", mapClassifier{namespacedMaps: map[string]struct{}{"ingress_map": {}}})
 
 	countFDs := func() int {
 		entries, err := os.ReadDir("/proc/self/fd")
@@ -2107,7 +3289,7 @@ func TestLoadFailureInParseProgReleasesMaps(t *testing.T) {
 	elfFile, err := elf.NewFile(f)
 	assert.NoError(t, err)
 	// kfunc_counters must be namespaced, or it is cached as global and kept.
-	loader := newElfLoader(elfFile, m.ebpf_maps, m.ebpf_progs, "test", map[string]struct{}{"kfunc_counters": {}})
+	loader := newElfLoader(elfFile, m.ebpf_maps, m.ebpf_progs, "test", mapClassifier{namespacedMaps: map[string]struct{}{"kfunc_counters": {}}})
 	loader.kfuncResolver = &fakeKfuncResolver{err: errors.New("injected")}
 
 	_, _, err = loader.doLoadELF(BpfCustomData{})
