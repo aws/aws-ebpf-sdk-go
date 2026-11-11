@@ -238,6 +238,9 @@ type createdObject struct {
 	isProg  bool
 }
 
+// progInfoByFD is ebpf_progs.GetBPFprogInfo. Overridden in tests.
+var progInfoByFD = ebpf_progs.GetBPFprogInfo
+
 // releaseObject closes an object a failed load created, and unpins it if the
 // pin still holds that object. Overridden in tests.
 var releaseObject = func(obj createdObject) {
@@ -328,21 +331,13 @@ func (e *elfLoader) loadMap(parsedMapData []ebpf_maps.CreateEBPFMapInput) (map[s
 		}
 		e.created = append(e.created, obj)
 
-		//Fill ID
-		if loadedMaps.PinOptions.Type == constdef.PIN_NONE.Index() {
-			mapInfo, err := (e.bpfMapApi).GetBPFmapInfo(bpfMap.MapFD)
-			if err != nil {
-				return nil, fmt.Errorf("failed to get map info '%s'", mapNameStr)
-			}
-			bpfMap.MapID = uint32(mapInfo.Id)
-		} else {
-			mapInfo, err := (e.bpfMapApi).GetMapFromPinPath(pinPath)
-			if err != nil {
-				return nil, fmt.Errorf("map '%s' doesn't exist", mapNameStr)
-			}
-			mapID := uint32(mapInfo.Id)
-			bpfMap.MapID = mapID
+		// Fill ID from the FD we just created, never by re-opening the pin path: a
+		// concurrent load sharing that path can replace the object before we read back.
+		mapInfo, err := (e.bpfMapApi).GetBPFmapInfo(bpfMap.MapFD)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get map info '%s' (fd=%d): %w", mapNameStr, bpfMap.MapFD, err)
 		}
+		bpfMap.MapID = uint32(mapInfo.Id)
 
 		programmedMaps[loadedMaps.Name] = bpfMap
 
@@ -429,12 +424,12 @@ func (e *elfLoader) loadProg(loadedProgData map[string]ebpf_progs.CreateEBPFProg
 		log.Infof("loaded prog with %d", progFD)
 		e.created = append(e.created, createdObject{fd: progFD, pinPath: pgmInput.PinPath, isProg: true})
 
-		//Fill ID
-		progInfo, newProgFD, err := e.bpfProgApi.GetProgFromPinPath(pgmInput.PinPath)
+		// Fill ID from the FD we just loaded, never by re-opening the pin path: a
+		// concurrent load sharing that path can replace the object before we read back.
+		progInfo, err := progInfoByFD(progFD)
 		if err != nil {
-			return nil, fmt.Errorf("failed to get ProgID")
+			return nil, fmt.Errorf("failed to get prog info '%s' (fd=%d): %w", pgmInput.PinPath, progFD, err)
 		}
-		unix.Close(int(newProgFD))
 
 		progID := int(progInfo.ID)
 

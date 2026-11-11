@@ -219,7 +219,12 @@ func (m *BpfMap) CreateBPFMap(MapMetaData CreateEBPFMapInput) (BpfMap, error) {
 	}
 
 	if MapMetaData.PinOptions != nil {
-		bpfMap.PinMap(MapMetaData.PinOptions.PinPath, MapMetaData.PinOptions.Type)
+		if err := bpfMap.PinMap(MapMetaData.PinOptions.PinPath, MapMetaData.PinOptions.Type); err != nil {
+			// The map was never handed back, so its FD is ours to close. Returning it
+			// unpinned would leave it invisible to pin-based recovery.
+			unix.Close(int(bpfMap.MapFD))
+			return BpfMap{}, fmt.Errorf("unable to pin map at %s: %w", MapMetaData.PinOptions.PinPath, err)
+		}
 	}
 	return bpfMap, nil
 }
