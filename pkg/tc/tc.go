@@ -31,6 +31,9 @@ const (
 
 var log = logger.Get()
 
+// qdiscList is netlink.QdiscList; tests replace it to simulate a race.
+var qdiscList = netlink.QdiscList
+
 type BpfTc interface {
 	TCIngressAttach(interfaceName string, progFD int, funcName string) error
 	TCIngressReplace(interfaceName string, progFD int, funcName string) error
@@ -55,11 +58,13 @@ func New(interfacePrefix []string) BpfTc {
 
 }
 
-func enableQdisc(link netlink.Link) bool {
-	qdiscs, err := netlink.QdiscList(link)
+// clsactPresent reports whether link has a qdisc in clsact's place. A failed
+// list reports false, so the caller tries to add clsact.
+func clsactPresent(link netlink.Link) bool {
+	qdiscs, err := qdiscList(link)
 	if err != nil {
-		log.Infof("Unable to check qdisc hence try installing")
-		return true
+		log.Warnf("Unable to list qdiscs on %s hence try installing: %v", link.Attrs().Name, err)
+		return false
 	}
 
 	qdiscHandle := netlink.MakeHandle(constdef.QDISC_HANDLE, 0)
@@ -69,13 +74,35 @@ func enableQdisc(link netlink.Link) bool {
 			continue
 		}
 		if (attrs.Handle&qdiscHandle) == qdiscHandle && attrs.Parent == netlink.HANDLE_CLSACT {
+			if qdisc.Type() != "clsact" {
+				log.Warnf("%s qdisc on %s is in clsact's place: both hooks share one filter block, so the second hook's filter collides with the first's", qdisc.Type(), link.Attrs().Name)
+			}
 			log.Infof("Found qdisc hence don't install again")
-			return false
+			return true
 		}
 	}
 	log.Infof("Qdisc is not enabled hence install")
-	return true
+	return false
+}
 
+// ensureClsact adds the clsact qdisc to link unless a qdisc is in its place. A
+// qdisc another TC user adds there between the list and the add is accepted.
+func ensureClsact(link netlink.Link, attrs netlink.QdiscAttrs) error {
+	if clsactPresent(link) {
+		return nil
+	}
+	err := netlink.QdiscAdd(&netlink.GenericQdisc{QdiscAttrs: attrs, QdiscType: "clsact"})
+	if errors.Is(err, unix.EEXIST) {
+		if clsactPresent(link) {
+			return nil
+		}
+		err = fmt.Errorf("%w, and a fresh qdisc list did not show a qdisc in clsact's place", err)
+	}
+	if err != nil {
+		log.Errorf("cannot add clsact qdisc on %s: %v", link.Attrs().Name, err)
+		return err
+	}
+	return nil
 }
 
 func mismatchedInterfacePrefix(interfaceName string, interfacePrefix []string) error {
@@ -119,20 +146,8 @@ func (m *bpfTc) setFilter(interfaceName string, filterParent uint32, progFD int,
 		Parent:    netlink.HANDLE_CLSACT,
 	}
 
-	if enableQdisc(intf) {
-		qdisc := &netlink.GenericQdisc{
-			QdiscAttrs: attrs,
-			QdiscType:  "clsact",
-		}
-
-		if err := netlink.QdiscAdd(qdisc); err != nil {
-			if errors.Is(err, unix.EEXIST) {
-				log.Infof("clsact qdisc add on %s: %v", interfaceName, err)
-				return err
-			}
-			log.Errorf("cannot add clsact qdisc: %v", err)
-			return err
-		}
+	if err := ensureClsact(intf, attrs); err != nil {
+		return err
 	}
 
 	filter := bpfFilter(attrs.LinkIndex, filterParent, progFD, funcName)
@@ -156,6 +171,7 @@ func (m *bpfTc) setFilter(interfaceName string, filterParent uint32, progFD int,
 		log.Errorf("TC %s filter %s failed on %s with fd %d: %v", hook, op, interfaceName, progFD, err)
 		return err
 	}
+	// aws-network-policy-agent's restart e2e test counts these lines.
 	log.Infof("TC %s filter %s done %s", hook, op, interfaceName)
 	return nil
 }

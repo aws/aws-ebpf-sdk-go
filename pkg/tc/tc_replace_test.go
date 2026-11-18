@@ -207,6 +207,137 @@ func TestTCReplaceExistingClsact(t *testing.T) {
 	assert.Equal(t, id, int(filtersAtHandle(t, link, egressHook)[0].Id))
 }
 
+// clsactAttrs are the attributes of the SDK's clsact qdisc on link.
+func clsactAttrs(link netlink.Link) netlink.QdiscAttrs {
+	return netlink.QdiscAttrs{
+		LinkIndex: link.Attrs().Index,
+		Handle:    netlink.MakeHandle(constdef.QDISC_HANDLE, 0),
+		Parent:    netlink.HANDLE_CLSACT,
+	}
+}
+
+// missFirstList makes the next qdisc list return nothing, as when another TC
+// user adds a qdisc right after the SDK lists.
+func missFirstList(t *testing.T) {
+	missed := false
+	qdiscList = func(link netlink.Link) ([]netlink.Qdisc, error) {
+		if !missed {
+			missed = true
+			return nil, nil
+		}
+		return netlink.QdiscList(link)
+	}
+	t.Cleanup(func() { qdiscList = netlink.QdiscList })
+}
+
+// clsact another TC user added between the list and the add is fine: both
+// hooks still get their filter.
+func TestTCReplaceClsactAddedDuringAttach(t *testing.T) {
+	requireRoot(t)
+	setupTest([]string{"eni1"}, t)
+	defer teardownTest([]string{"eni1"}, t)
+	client := New([]string{"eni"})
+	link := linkByName(t, "eni1")
+	require.NoError(t, netlink.QdiscAdd(&netlink.GenericQdisc{QdiscAttrs: clsactAttrs(link), QdiscType: "clsact"}))
+	fd, id := loadRetProg(t, tcActOK)
+	for _, h := range replaceHooks {
+		missFirstList(t)
+		require.NoError(t, h.replace(client, "eni1", fd, DUMMY_PROG_NAME))
+		got := filtersAtHandle(t, link, h.hook)
+		require.Len(t, got, 1, h.name)
+		assert.Equal(t, id, int(got[0].Id))
+	}
+}
+
+// An ingress qdisc in clsact's place, present or added during the attach,
+// doesn't fail the call, as before replace existed. Both hooks share its one
+// filter block, so the second replace swaps the first one's program.
+func TestTCReplaceOnIngressQdisc(t *testing.T) {
+	requireRoot(t)
+	for _, race := range []bool{false, true} {
+		name := "present"
+		if race {
+			name = "added during the attach"
+		}
+		t.Run(name, func(t *testing.T) {
+			setupTest([]string{"eni1"}, t)
+			defer teardownTest([]string{"eni1"}, t)
+			client := New([]string{"eni"})
+			link := linkByName(t, "eni1")
+			require.NoError(t, netlink.QdiscAdd(&netlink.Ingress{QdiscAttrs: netlink.QdiscAttrs{LinkIndex: link.Attrs().Index, Parent: netlink.HANDLE_INGRESS}}))
+			var lastID int
+			for _, h := range replaceHooks {
+				fd, id := loadRetProg(t, tcActOK)
+				if race {
+					missFirstList(t)
+				}
+				require.NoError(t, h.replace(client, "eni1", fd, DUMMY_PROG_NAME))
+				lastID = id
+			}
+			got := filtersAtHandle(t, link, ingressHook)
+			require.Len(t, got, 1)
+			assert.Equal(t, lastID, int(got[0].Id))
+		})
+	}
+}
+
+// With an ingress qdisc and a u32 filter at priority 1, as the CNI bandwidth
+// plugin sets up, replace fails with EINVAL and leaves the u32 filter alone.
+func TestTCReplaceOnBandwidthPluginQdisc(t *testing.T) {
+	requireRoot(t)
+	setupTest([]string{"eni1"}, t)
+	defer teardownTest([]string{"eni1"}, t)
+	client := New([]string{"eni"})
+	link := linkByName(t, "eni1")
+	require.NoError(t, netlink.QdiscAdd(&netlink.Ingress{QdiscAttrs: netlink.QdiscAttrs{LinkIndex: link.Attrs().Index, Parent: netlink.HANDLE_INGRESS}}))
+	require.NoError(t, netlink.FilterAdd(&netlink.U32{FilterAttrs: netlink.FilterAttrs{LinkIndex: link.Attrs().Index, Parent: netlink.MakeHandle(0xffff, 0), Priority: 1, Protocol: unix.ETH_P_ALL}, ClassId: netlink.MakeHandle(1, 1)}))
+	fd, _ := loadRetProg(t, tcActOK)
+	for _, h := range replaceHooks {
+		err := h.replace(client, "eni1", fd, DUMMY_PROG_NAME)
+		assert.True(t, errors.Is(err, unix.EINVAL), "%s: got %v", h.name, err)
+	}
+	filters, err := netlink.FilterList(link, netlink.MakeHandle(0xffff, 0))
+	require.NoError(t, err)
+	require.Len(t, filters, 1)
+	assert.Equal(t, "u32", filters[0].Type())
+}
+
+// When the qdisc list keeps failing, the SDK still adds clsact if it is
+// missing. If clsact is there, the add's EEXIST can't be confirmed, so the call
+// fails and the existing filter stays.
+func TestTCReplaceQdiscListFails(t *testing.T) {
+	requireRoot(t)
+	failList := func(t *testing.T) {
+		qdiscList = func(netlink.Link) ([]netlink.Qdisc, error) { return nil, errors.New("list failed") }
+		t.Cleanup(func() { qdiscList = netlink.QdiscList })
+	}
+	t.Run("no qdisc", func(t *testing.T) {
+		setupTest([]string{"eni1"}, t)
+		defer teardownTest([]string{"eni1"}, t)
+		client := New([]string{"eni"})
+		fd, id := loadRetProg(t, tcActOK)
+		failList(t)
+		require.NoError(t, client.TCIngressReplace("eni1", fd, DUMMY_PROG_NAME))
+		got := filtersAtHandle(t, linkByName(t, "eni1"), ingressHook)
+		require.Len(t, got, 1)
+		assert.Equal(t, id, int(got[0].Id))
+	})
+	t.Run("clsact and filter present", func(t *testing.T) {
+		setupTest([]string{"eni1"}, t)
+		defer teardownTest([]string{"eni1"}, t)
+		client := New([]string{"eni"})
+		fdA, idA := loadRetProg(t, tcActOK)
+		fdB, _ := loadRetProg(t, tcActOK)
+		require.NoError(t, client.TCIngressReplace("eni1", fdA, DUMMY_PROG_NAME))
+		failList(t)
+		err := client.TCIngressReplace("eni1", fdB, DUMMY_PROG_NAME)
+		assert.True(t, errors.Is(err, unix.EEXIST), "got %v", err)
+		got := filtersAtHandle(t, linkByName(t, "eni1"), ingressHook)
+		require.Len(t, got, 1)
+		assert.Equal(t, idA, int(got[0].Id))
+	})
+}
+
 func TestTCReplaceErrors(t *testing.T) {
 	requireRoot(t)
 	setupTest([]string{"eni1"}, t)
