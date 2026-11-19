@@ -33,8 +33,10 @@ var log = logger.Get()
 
 type BpfTc interface {
 	TCIngressAttach(interfaceName string, progFD int, funcName string) error
+	TCIngressReplace(interfaceName string, progFD int, funcName string) error
 	TCIngressDetach(interfaceName string) error
 	TCEgressAttach(interfaceName string, progFD int, funcName string) error
+	TCEgressReplace(interfaceName string, progFD int, funcName string) error
 	TCEgressDetach(interfaceName string) error
 	CleanupQdiscs(podIngressCleanup bool, podEgressCleanup bool) error
 	GetAllAttachedProgIds() (map[string]int, map[string]int, error)
@@ -44,20 +46,25 @@ var _ BpfTc = &bpfTc{}
 
 type bpfTc struct {
 	InterfacePrefix []string
+	// qdiscList is netlink.QdiscList; tests replace it to simulate a race.
+	qdiscList func(netlink.Link) ([]netlink.Qdisc, error)
 }
 
 func New(interfacePrefix []string) BpfTc {
 	return &bpfTc{
 		InterfacePrefix: interfacePrefix,
+		qdiscList:       netlink.QdiscList,
 	}
 
 }
 
-func enableQdisc(link netlink.Link) bool {
-	qdiscs, err := netlink.QdiscList(link)
+// clsactPresent reports whether link has a qdisc in clsact's place. A failed
+// list reports false, so the caller tries to add clsact.
+func (m *bpfTc) clsactPresent(link netlink.Link) bool {
+	qdiscs, err := m.qdiscList(link)
 	if err != nil {
-		log.Infof("Unable to check qdisc hence try installing")
-		return true
+		log.Warnf("Unable to list qdiscs on %s hence try installing: %v", link.Attrs().Name, err)
+		return false
 	}
 
 	qdiscHandle := netlink.MakeHandle(constdef.QDISC_HANDLE, 0)
@@ -67,13 +74,35 @@ func enableQdisc(link netlink.Link) bool {
 			continue
 		}
 		if (attrs.Handle&qdiscHandle) == qdiscHandle && attrs.Parent == netlink.HANDLE_CLSACT {
+			if qdisc.Type() != "clsact" {
+				log.Warnf("%s qdisc on %s is in clsact's place: both hooks share one filter block, so the second hook's filter collides with the first's", qdisc.Type(), link.Attrs().Name)
+			}
 			log.Infof("Found qdisc hence don't install again")
-			return false
+			return true
 		}
 	}
 	log.Infof("Qdisc is not enabled hence install")
-	return true
+	return false
+}
 
+// ensureClsact adds the clsact qdisc to link unless a qdisc is in its place. A
+// qdisc another TC user adds there between the list and the add is accepted.
+func (m *bpfTc) ensureClsact(link netlink.Link, attrs netlink.QdiscAttrs) error {
+	if m.clsactPresent(link) {
+		return nil
+	}
+	err := netlink.QdiscAdd(&netlink.GenericQdisc{QdiscAttrs: attrs, QdiscType: "clsact"})
+	if errors.Is(err, unix.EEXIST) {
+		if m.clsactPresent(link) {
+			return nil
+		}
+		err = fmt.Errorf("%w, and a fresh qdisc list did not show a qdisc in clsact's place", err)
+	}
+	if err != nil {
+		log.Errorf("cannot add clsact qdisc on %s: %v", link.Attrs().Name, err)
+		return err
+	}
+	return nil
 }
 
 func mismatchedInterfacePrefix(interfaceName string, interfacePrefix []string) error {
@@ -89,6 +118,17 @@ func mismatchedInterfacePrefix(interfaceName string, interfacePrefix []string) e
 }
 
 func (m *bpfTc) TCIngressAttach(interfaceName string, progFD int, funcName string) error {
+	return m.setFilter(interfaceName, uint32(netlink.HANDLE_MIN_INGRESS), progFD, funcName, false)
+}
+
+// TCIngressReplace is TCIngressAttach, except that an existing filter at the
+// same handle, priority and protocol gets its program swapped in one request,
+// so the hook is never without a filter.
+func (m *bpfTc) TCIngressReplace(interfaceName string, progFD int, funcName string) error {
+	return m.setFilter(interfaceName, uint32(netlink.HANDLE_MIN_INGRESS), progFD, funcName, true)
+}
+
+func (m *bpfTc) setFilter(interfaceName string, filterParent uint32, progFD int, funcName string, replace bool) error {
 
 	if err := mismatchedInterfacePrefix(interfaceName, m.InterfacePrefix); err != nil {
 		return err
@@ -106,23 +146,41 @@ func (m *bpfTc) TCIngressAttach(interfaceName string, progFD int, funcName strin
 		Parent:    netlink.HANDLE_CLSACT,
 	}
 
-	if enableQdisc(intf) {
-		qdisc := &netlink.GenericQdisc{
-			QdiscAttrs: attrs,
-			QdiscType:  "clsact",
-		}
-
-		if err := netlink.QdiscAdd(qdisc); err != nil {
-			log.Errorf("cannot add clsact qdisc: %v", err)
-			return err
-		}
+	if err := m.ensureClsact(intf, attrs); err != nil {
+		return err
 	}
 
-	// construct the filter
-	filter := &netlink.BpfFilter{
+	filter := bpfFilter(attrs.LinkIndex, filterParent, progFD, funcName)
+
+	hook, op := "host ingress", "add"
+	if filterParent == uint32(netlink.HANDLE_MIN_EGRESS) {
+		hook = "host egress"
+	}
+	if replace {
+		op = "replace"
+		err = netlink.FilterReplace(filter)
+	} else {
+		err = netlink.FilterAdd(filter)
+	}
+	if errors.Is(err, unix.EEXIST) {
+		// Only add returns this; the caller may replace instead.
+		log.Infof("TC %s filter %s on %s: %v", hook, op, interfaceName, err)
+		return err
+	}
+	if err != nil {
+		log.Errorf("TC %s filter %s failed on %s with fd %d: %v", hook, op, interfaceName, progFD, err)
+		return err
+	}
+	// aws-network-policy-agent's restart e2e test counts these lines.
+	log.Infof("TC %s filter %s done %s", hook, op, interfaceName)
+	return nil
+}
+
+func bpfFilter(linkIndex int, filterParent uint32, progFD int, funcName string) *netlink.BpfFilter {
+	return &netlink.BpfFilter{
 		FilterAttrs: netlink.FilterAttrs{
-			LinkIndex: attrs.LinkIndex,
-			Parent:    uint32(netlink.HANDLE_MIN_INGRESS),
+			LinkIndex: linkIndex,
+			Parent:    filterParent,
 			Handle:    constdef.DEFAULT_BPF_FILTER_HANDLE,
 			Protocol:  unix.ETH_P_ALL,
 			Priority:  1,
@@ -131,13 +189,6 @@ func (m *bpfTc) TCIngressAttach(interfaceName string, progFD int, funcName strin
 		Name:         funcName,
 		DirectAction: true,
 	}
-
-	if err = netlink.FilterAdd(filter); err != nil {
-		log.Errorf("while loading ingress program %q on fd %d: %v", "handle ingress", progFD, err)
-		return err
-	}
-	log.Infof("TC ingress filter add done %s", interfaceName)
-	return nil
 }
 
 func (m *bpfTc) TCIngressDetach(interfaceName string) error {
@@ -177,55 +228,12 @@ func (m *bpfTc) TCIngressDetach(interfaceName string) error {
 }
 
 func (m *bpfTc) TCEgressAttach(interfaceName string, progFD int, funcName string) error {
+	return m.setFilter(interfaceName, uint32(netlink.HANDLE_MIN_EGRESS), progFD, funcName, false)
+}
 
-	if err := mismatchedInterfacePrefix(interfaceName, m.InterfacePrefix); err != nil {
-		return err
-	}
-
-	intf, err := netlink.LinkByName(interfaceName)
-	if err != nil {
-		log.Errorf("failed to find device by name %s: %w", interfaceName, err)
-		return err
-	}
-
-	attrs := netlink.QdiscAttrs{
-		LinkIndex: intf.Attrs().Index,
-		Handle:    netlink.MakeHandle(constdef.QDISC_HANDLE, 0),
-		Parent:    netlink.HANDLE_CLSACT,
-	}
-
-	if enableQdisc(intf) {
-		qdisc := &netlink.GenericQdisc{
-			QdiscAttrs: attrs,
-			QdiscType:  "clsact",
-		}
-
-		if err := netlink.QdiscAdd(qdisc); err != nil {
-			log.Errorf("cannot add clsact qdisc: %v", err)
-			return err
-		}
-	}
-
-	// construct the filter
-	filter := &netlink.BpfFilter{
-		FilterAttrs: netlink.FilterAttrs{
-			LinkIndex: attrs.LinkIndex,
-			Parent:    uint32(netlink.HANDLE_MIN_EGRESS),
-			Handle:    constdef.DEFAULT_BPF_FILTER_HANDLE,
-			Protocol:  unix.ETH_P_ALL,
-			Priority:  1,
-		},
-		Fd:           progFD,
-		Name:         funcName,
-		DirectAction: true,
-	}
-
-	if err = netlink.FilterAdd(filter); err != nil {
-		log.Errorf("while loading egress program %q on fd %d: %v", "handle egress", progFD, err)
-		return err
-	}
-	log.Infof("TC filter egress add done %s", interfaceName)
-	return nil
+// TCEgressReplace is TCIngressReplace for the host tc-egress hook.
+func (m *bpfTc) TCEgressReplace(interfaceName string, progFD int, funcName string) error {
+	return m.setFilter(interfaceName, uint32(netlink.HANDLE_MIN_EGRESS), progFD, funcName, true)
 }
 
 func (m *bpfTc) TCEgressDetach(interfaceName string) error {
