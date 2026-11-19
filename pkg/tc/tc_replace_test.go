@@ -216,18 +216,17 @@ func clsactAttrs(link netlink.Link) netlink.QdiscAttrs {
 	}
 }
 
-// missFirstList makes the next qdisc list return nothing, as when another TC
-// user adds a qdisc right after the SDK lists.
-func missFirstList(t *testing.T) {
+// missFirstList makes client's next qdisc list return nothing, as when
+// another TC user adds a qdisc right after the SDK lists.
+func missFirstList(client BpfTc) {
 	missed := false
-	qdiscList = func(link netlink.Link) ([]netlink.Qdisc, error) {
+	client.(*bpfTc).qdiscList = func(link netlink.Link) ([]netlink.Qdisc, error) {
 		if !missed {
 			missed = true
 			return nil, nil
 		}
 		return netlink.QdiscList(link)
 	}
-	t.Cleanup(func() { qdiscList = netlink.QdiscList })
 }
 
 // clsact another TC user added between the list and the add is fine: both
@@ -241,7 +240,7 @@ func TestTCReplaceClsactAddedDuringAttach(t *testing.T) {
 	require.NoError(t, netlink.QdiscAdd(&netlink.GenericQdisc{QdiscAttrs: clsactAttrs(link), QdiscType: "clsact"}))
 	fd, id := loadRetProg(t, tcActOK)
 	for _, h := range replaceHooks {
-		missFirstList(t)
+		missFirstList(client)
 		require.NoError(t, h.replace(client, "eni1", fd, DUMMY_PROG_NAME))
 		got := filtersAtHandle(t, link, h.hook)
 		require.Len(t, got, 1, h.name)
@@ -269,7 +268,7 @@ func TestTCReplaceOnIngressQdisc(t *testing.T) {
 			for _, h := range replaceHooks {
 				fd, id := loadRetProg(t, tcActOK)
 				if race {
-					missFirstList(t)
+					missFirstList(client)
 				}
 				require.NoError(t, h.replace(client, "eni1", fd, DUMMY_PROG_NAME))
 				lastID = id
@@ -307,16 +306,15 @@ func TestTCReplaceOnBandwidthPluginQdisc(t *testing.T) {
 // fails and the existing filter stays.
 func TestTCReplaceQdiscListFails(t *testing.T) {
 	requireRoot(t)
-	failList := func(t *testing.T) {
-		qdiscList = func(netlink.Link) ([]netlink.Qdisc, error) { return nil, errors.New("list failed") }
-		t.Cleanup(func() { qdiscList = netlink.QdiscList })
+	failList := func(client BpfTc) {
+		client.(*bpfTc).qdiscList = func(netlink.Link) ([]netlink.Qdisc, error) { return nil, errors.New("list failed") }
 	}
 	t.Run("no qdisc", func(t *testing.T) {
 		setupTest([]string{"eni1"}, t)
 		defer teardownTest([]string{"eni1"}, t)
 		client := New([]string{"eni"})
 		fd, id := loadRetProg(t, tcActOK)
-		failList(t)
+		failList(client)
 		require.NoError(t, client.TCIngressReplace("eni1", fd, DUMMY_PROG_NAME))
 		got := filtersAtHandle(t, linkByName(t, "eni1"), ingressHook)
 		require.Len(t, got, 1)
@@ -329,7 +327,7 @@ func TestTCReplaceQdiscListFails(t *testing.T) {
 		fdA, idA := loadRetProg(t, tcActOK)
 		fdB, _ := loadRetProg(t, tcActOK)
 		require.NoError(t, client.TCIngressReplace("eni1", fdA, DUMMY_PROG_NAME))
-		failList(t)
+		failList(client)
 		err := client.TCIngressReplace("eni1", fdB, DUMMY_PROG_NAME)
 		assert.True(t, errors.Is(err, unix.EEXIST), "got %v", err)
 		got := filtersAtHandle(t, linkByName(t, "eni1"), ingressHook)

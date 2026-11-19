@@ -31,9 +31,6 @@ const (
 
 var log = logger.Get()
 
-// qdiscList is netlink.QdiscList; tests replace it to simulate a race.
-var qdiscList = netlink.QdiscList
-
 type BpfTc interface {
 	TCIngressAttach(interfaceName string, progFD int, funcName string) error
 	TCIngressReplace(interfaceName string, progFD int, funcName string) error
@@ -49,19 +46,22 @@ var _ BpfTc = &bpfTc{}
 
 type bpfTc struct {
 	InterfacePrefix []string
+	// qdiscList is netlink.QdiscList; tests replace it to simulate a race.
+	qdiscList func(netlink.Link) ([]netlink.Qdisc, error)
 }
 
 func New(interfacePrefix []string) BpfTc {
 	return &bpfTc{
 		InterfacePrefix: interfacePrefix,
+		qdiscList:       netlink.QdiscList,
 	}
 
 }
 
 // clsactPresent reports whether link has a qdisc in clsact's place. A failed
 // list reports false, so the caller tries to add clsact.
-func clsactPresent(link netlink.Link) bool {
-	qdiscs, err := qdiscList(link)
+func (m *bpfTc) clsactPresent(link netlink.Link) bool {
+	qdiscs, err := m.qdiscList(link)
 	if err != nil {
 		log.Warnf("Unable to list qdiscs on %s hence try installing: %v", link.Attrs().Name, err)
 		return false
@@ -87,13 +87,13 @@ func clsactPresent(link netlink.Link) bool {
 
 // ensureClsact adds the clsact qdisc to link unless a qdisc is in its place. A
 // qdisc another TC user adds there between the list and the add is accepted.
-func ensureClsact(link netlink.Link, attrs netlink.QdiscAttrs) error {
-	if clsactPresent(link) {
+func (m *bpfTc) ensureClsact(link netlink.Link, attrs netlink.QdiscAttrs) error {
+	if m.clsactPresent(link) {
 		return nil
 	}
 	err := netlink.QdiscAdd(&netlink.GenericQdisc{QdiscAttrs: attrs, QdiscType: "clsact"})
 	if errors.Is(err, unix.EEXIST) {
-		if clsactPresent(link) {
+		if m.clsactPresent(link) {
 			return nil
 		}
 		err = fmt.Errorf("%w, and a fresh qdisc list did not show a qdisc in clsact's place", err)
@@ -146,7 +146,7 @@ func (m *bpfTc) setFilter(interfaceName string, filterParent uint32, progFD int,
 		Parent:    netlink.HANDLE_CLSACT,
 	}
 
-	if err := ensureClsact(intf, attrs); err != nil {
+	if err := m.ensureClsact(intf, attrs); err != nil {
 		return err
 	}
 
