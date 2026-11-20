@@ -109,7 +109,7 @@ func UnPinObject(pinPath string) error {
 
 	err = os.Remove(pinPath)
 	if err != nil {
-		log.Infof("File remove failed ", pinPath)
+		log.Infof("File remove failed %s", pinPath)
 		return err
 	}
 
