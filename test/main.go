@@ -107,7 +107,10 @@ func main() {
 }
 
 func TestLoadProg() error {
-	gosdkClient := goelf.New(goelf.Config{})
+	gosdkClient, err := goelf.New(goelf.Config{})
+	if err != nil {
+		return fmt.Errorf("create SDK client: %w", err)
+	}
 	progInfo, _, err := gosdkClient.LoadBpfFile("c/test.bpf.elf", "test")
 	if err != nil {
 		fmt.Println("Load BPF failed", "err:", err)
@@ -121,7 +124,10 @@ func TestLoadProg() error {
 }
 
 func TestLoadv6Prog() error {
-	gosdkClient := goelf.New(goelf.Config{})
+	gosdkClient, err := goelf.New(goelf.Config{})
+	if err != nil {
+		return fmt.Errorf("create SDK client: %w", err)
+	}
 	progInfo, _, err := gosdkClient.LoadBpfFile("c/test-v6.bpf.elf", "test")
 	if err != nil {
 		fmt.Println("Load BPF failed", "err:", err)
@@ -147,7 +153,10 @@ func TestLoadKfuncProg() error {
 		fmt.Println("nf_conntrack BTF not found as a module: kfuncs must be in vmlinux")
 	}
 
-	gosdkClient := goelf.New(goelf.Config{})
+	gosdkClient, err := goelf.New(goelf.Config{})
+	if err != nil {
+		return fmt.Errorf("create SDK client: %w", err)
+	}
 	progInfo, _, err := gosdkClient.LoadBpfFile("../test-data/tc.kfunc.bpf.elf", "test")
 	if err != nil {
 		fmt.Println("Load BPF failed", "err:", err)
@@ -164,7 +173,10 @@ func TestLoadKfuncProg() error {
 }
 
 func TestLoadMapWithNoProg() error {
-	gosdkClient := goelf.New(goelf.Config{})
+	gosdkClient, err := goelf.New(goelf.Config{})
+	if err != nil {
+		return fmt.Errorf("create SDK client: %w", err)
+	}
 	_, loadedMap, err := gosdkClient.LoadBpfFile("c/test-map.bpf.elf", "test")
 	if err != nil {
 		fmt.Println("Load BPF failed", "err:", err)
@@ -179,7 +191,10 @@ func TestLoadMapWithNoProg() error {
 }
 
 func TestMapOperations() error {
-	gosdkClient := goelf.New(goelf.Config{})
+	gosdkClient, err := goelf.New(goelf.Config{})
+	if err != nil {
+		return fmt.Errorf("create SDK client: %w", err)
+	}
 	_, loadedMap, err := gosdkClient.LoadBpfFile("c/test-map.bpf.elf", "operations")
 	if err != nil {
 		fmt.Println("Load BPF failed", "err:", err)
@@ -316,7 +331,10 @@ func TestMapOperations() error {
 }
 
 func TestLoadTCfilter() error {
-	gosdkClient := goelf.New(goelf.Config{})
+	gosdkClient, err := goelf.New(goelf.Config{})
+	if err != nil {
+		return fmt.Errorf("create SDK client: %w", err)
+	}
 	progInfo, _, err := gosdkClient.LoadBpfFile("c/test.bpf.elf", "test")
 	if err != nil {
 		fmt.Println("Load BPF failed", "err:", err)
@@ -356,7 +374,10 @@ func TestLoadTCfilter() error {
 }
 
 func TestLoadMapWithCustomSize() error {
-	gosdkClient := goelf.New(goelf.Config{})
+	gosdkClient, err := goelf.New(goelf.Config{})
+	if err != nil {
+		return fmt.Errorf("create SDK client: %w", err)
+	}
 
 	var customData goelf.BpfCustomData
 	customData.FilePath = "c/test-map.bpf.elf"
@@ -379,7 +400,10 @@ func TestLoadMapWithCustomSize() error {
 }
 
 func TestBulkMapOperations() error {
-	gosdkClient := goelf.New(goelf.Config{})
+	gosdkClient, err := goelf.New(goelf.Config{})
+	if err != nil {
+		return fmt.Errorf("create SDK client: %w", err)
+	}
 	_, loadedMap, err := gosdkClient.LoadBpfFile("c/test-map.bpf.elf", "operations")
 	if err != nil {
 		fmt.Println("Load BPF failed", "err:", err)
@@ -465,7 +489,10 @@ func bpfInetTrieKeyToIPNet(key BPFInetTrieKey) net.IPNet {
 }
 
 func TestBulkRefreshMapOperations() error {
-	gosdkClient := goelf.New(goelf.Config{})
+	gosdkClient, err := goelf.New(goelf.Config{})
+	if err != nil {
+		return fmt.Errorf("create SDK client: %w", err)
+	}
 	_, loadedMap, err := gosdkClient.LoadBpfFile("c/test-map.bpf.elf", "operations")
 	if err != nil {
 		fmt.Println("Load BPF failed", "err:", err)
@@ -519,7 +546,10 @@ func TestBulkRefreshMapOperations() error {
 }
 
 func TestTailCallProgArray() error {
-	gosdkClient := goelf.New(goelf.Config{})
+	gosdkClient, err := goelf.New(goelf.Config{})
+	if err != nil {
+		return fmt.Errorf("create SDK client: %w", err)
+	}
 
 	// Load caller programs (contains the prog array map)
 	progInfo, loadedMaps, err := gosdkClient.LoadBpfFile("c/tc.tailcall.bpf.elf", "tailcall")
