@@ -75,12 +75,13 @@ func PinObject(objFD uint32, pinPath string) error {
 		uintptr(pinData),
 		uintptr(int(pinDataSize)),
 	)
-	if errno < 0 {
-		log.Infof("Unable to pin map and ret %d and err %s", int(ret), errno)
-		return fmt.Errorf("Unable to pin map: %s", errno)
+	// errno is an unsigned syscall.Errno, so a failure is any non-zero value.
+	if errno != 0 {
+		log.Infof("Unable to pin object fd %d at %s: ret %d, err %s", objFD, pinPath, int(ret), errno)
+		return fmt.Errorf("unable to pin object: %w", errno)
 	}
 	//TODO : might have to return FD for node agent
-	log.Infof("Pin done with fd : %d and errno %d", ret, errno)
+	log.Infof("Pin done for fd %d at %s", objFD, pinPath)
 	return nil
 }
 
