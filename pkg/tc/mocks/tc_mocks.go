@@ -34,17 +34,17 @@ func (m *MockBpfTc) EXPECT() *MockBpfTcMockRecorder {
 }
 
 // CleanupQdiscs mocks base method.
-func (m *MockBpfTc) CleanupQdiscs(ingressCleanup, egressCleanup bool) error {
+func (m *MockBpfTc) CleanupQdiscs(podIngressCleanup, podEgressCleanup bool) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "CleanupQdiscs", ingressCleanup, egressCleanup)
+	ret := m.ctrl.Call(m, "CleanupQdiscs", podIngressCleanup, podEgressCleanup)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // CleanupQdiscs indicates an expected call of CleanupQdiscs.
-func (mr *MockBpfTcMockRecorder) CleanupQdiscs(ingressCleanup, egressCleanup interface{}) *gomock.Call {
+func (mr *MockBpfTcMockRecorder) CleanupQdiscs(podIngressCleanup, podEgressCleanup interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CleanupQdiscs", reflect.TypeOf((*MockBpfTc)(nil).CleanupQdiscs), ingressCleanup, egressCleanup)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CleanupQdiscs", reflect.TypeOf((*MockBpfTc)(nil).CleanupQdiscs), podIngressCleanup, podEgressCleanup)
 }
 
 // GetAllAttachedProgIds mocks base method.
@@ -91,6 +91,20 @@ func (mr *MockBpfTcMockRecorder) TCEgressDetach(interfaceName interface{}) *gomo
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "TCEgressDetach", reflect.TypeOf((*MockBpfTc)(nil).TCEgressDetach), interfaceName)
 }
 
+// TCEgressReplace mocks base method.
+func (m *MockBpfTc) TCEgressReplace(interfaceName string, progFD int, funcName string) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "TCEgressReplace", interfaceName, progFD, funcName)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// TCEgressReplace indicates an expected call of TCEgressReplace.
+func (mr *MockBpfTcMockRecorder) TCEgressReplace(interfaceName, progFD, funcName interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "TCEgressReplace", reflect.TypeOf((*MockBpfTc)(nil).TCEgressReplace), interfaceName, progFD, funcName)
+}
+
 // TCIngressAttach mocks base method.
 func (m *MockBpfTc) TCIngressAttach(interfaceName string, progFD int, funcName string) error {
 	m.ctrl.T.Helper()
@@ -117,4 +131,18 @@ func (m *MockBpfTc) TCIngressDetach(interfaceName string) error {
 func (mr *MockBpfTcMockRecorder) TCIngressDetach(interfaceName interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "TCIngressDetach", reflect.TypeOf((*MockBpfTc)(nil).TCIngressDetach), interfaceName)
+}
+
+// TCIngressReplace mocks base method.
+func (m *MockBpfTc) TCIngressReplace(interfaceName string, progFD int, funcName string) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "TCIngressReplace", interfaceName, progFD, funcName)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// TCIngressReplace indicates an expected call of TCIngressReplace.
+func (mr *MockBpfTcMockRecorder) TCIngressReplace(interfaceName, progFD, funcName interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "TCIngressReplace", reflect.TypeOf((*MockBpfTc)(nil).TCIngressReplace), interfaceName, progFD, funcName)
 }
