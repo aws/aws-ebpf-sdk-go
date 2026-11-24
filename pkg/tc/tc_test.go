@@ -87,6 +87,16 @@ func teardownTest(interfaceNames []string, t *testing.T) {
 	unmount_bpf_fs()
 	//Cleanup link
 	for _, interfaceName := range interfaceNames {
+		// Delete clsact qdisc first so no state leaks to the next run.
+		if link, err := netlink.LinkByName(interfaceName); err == nil {
+			_ = netlink.QdiscDel(&netlink.GenericQdisc{
+				QdiscAttrs: netlink.QdiscAttrs{
+					LinkIndex: link.Attrs().Index,
+					Parent:    netlink.HANDLE_CLSACT,
+				},
+				QdiscType: "clsact",
+			})
+		}
 		linkAttr := netlink.LinkAttrs{Name: interfaceName}
 		linkIFB := netlink.Ifb{}
 		linkIFB.LinkAttrs = linkAttr
