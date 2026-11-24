@@ -22,6 +22,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -120,9 +121,8 @@ func TestLoad(t *testing.T) {
 			m.ebpf_maps.EXPECT().CreateBPFMap(gomock.Any()).AnyTimes()
 			m.ebpf_progs.EXPECT().LoadProg(gomock.Any()).AnyTimes()
 			m.ebpf_maps.EXPECT().PinMap(gomock.Any(), gomock.Any()).AnyTimes()
-			m.ebpf_maps.EXPECT().GetMapFromPinPath(gomock.Any()).AnyTimes()
-			// -1: loadProg closes this FD, and a zero value would close stdin.
-			m.ebpf_progs.EXPECT().GetProgFromPinPath(gomock.Any()).Return(ebpf_progs.BpfProgInfo{}, -1, nil).AnyTimes()
+			m.ebpf_maps.EXPECT().GetBPFmapInfo(gomock.Any()).AnyTimes()
+			stubProgInfo(t, func(int) (ebpf_progs.BpfProgInfo, error) { return ebpf_progs.BpfProgInfo{}, nil })
 			m.ebpf_progs.EXPECT().GetBPFProgAssociatedMapsIDs(gomock.Any()).AnyTimes()
 
 			elfFile, err := elf.NewFile(f)
@@ -542,7 +542,7 @@ func TestParseProg(t *testing.T) {
 
 			m.ebpf_maps.EXPECT().CreateBPFMap(gomock.Any()).AnyTimes()
 			m.ebpf_maps.EXPECT().PinMap(gomock.Any(), gomock.Any()).AnyTimes()
-			m.ebpf_maps.EXPECT().GetMapFromPinPath(gomock.Any()).AnyTimes()
+			m.ebpf_maps.EXPECT().GetBPFmapInfo(gomock.Any()).AnyTimes()
 
 			loadedMapData, err := elfLoader.loadMap(mapData)
 			assert.NoError(t, err)
@@ -805,7 +805,7 @@ func TestLoadMap(t *testing.T) {
 			wantErr:    true,
 		},
 		{
-			name:      "Pinned map retrieval from path",
+			name:      "Pinned map ID read from its FD, not the pin path",
 			pinType:   constdef.PIN_GLOBAL_NS.Index(),
 			mapFD:     30,
 			mapInfo:   ebpf_maps.BpfMapInfo{Id: 54321},
@@ -826,14 +826,10 @@ func TestLoadMap(t *testing.T) {
 			// Mock CreateBPFMap to return a BpfMap with MapFD set to tt.mapFD
 			mockBpfMapAPI.EXPECT().CreateBPFMap(gomock.Any()).Return(ebpf_maps.BpfMap{MapFD: tt.mapFD}, nil).AnyTimes()
 
-			// Mock GetBPFmapInfo or GetMapFromPinPath based on the pin type and error expectation
-			if tt.getInfoErr != nil {
-				mockBpfMapAPI.EXPECT().GetBPFmapInfo(tt.mapFD).Return(ebpf_maps.BpfMapInfo{}, tt.getInfoErr)
-			} else if tt.pinType == constdef.PIN_NONE.Index() {
-				mockBpfMapAPI.EXPECT().GetBPFmapInfo(tt.mapFD).Return(tt.mapInfo, nil)
-			} else {
-				mockBpfMapAPI.EXPECT().GetMapFromPinPath(tt.pinPath).Return(tt.mapInfo, nil)
-			}
+			// The map ID always comes from the created map's own FD, whatever the pin type.
+			// GetMapFromPinPath is deliberately not mocked: re-reading the pin path races
+			// with concurrent loads sharing it (aws-ebpf-sdk-go#167).
+			mockBpfMapAPI.EXPECT().GetBPFmapInfo(tt.mapFD).Return(tt.mapInfo, tt.getInfoErr)
 
 			// Set up the loader and the map input
 			elfLoader := &elfLoader{
@@ -850,6 +846,9 @@ func TestLoadMap(t *testing.T) {
 			loadedMaps, err := elfLoader.loadMap(parsedMapData)
 			if tt.wantErr {
 				assert.Error(t, err)
+				if tt.getInfoErr != nil {
+					assert.ErrorIs(t, err, tt.getInfoErr)
+				}
 			} else {
 				assert.NoError(t, err)
 				if loadedMap, exists := loadedMaps["test_map"]; exists {
@@ -887,6 +886,57 @@ func TestLoadProgReturnsUnderlyingError(t *testing.T) {
 	assert.ErrorIs(t, err, loadErr)
 }
 
+// stubProgInfo replaces the by-FD program info lookup for the duration of the test.
+func stubProgInfo(t *testing.T, fn func(int) (ebpf_progs.BpfProgInfo, error)) {
+	t.Helper()
+	orig := progInfoByFD
+	t.Cleanup(func() { progInfoByFD = orig })
+	progInfoByFD = fn
+}
+
+// loadProg takes the program ID from the FD it just loaded. GetProgFromPinPath is
+// deliberately not mocked: re-reading the pin path races with concurrent loads
+// sharing it (aws-ebpf-sdk-go#167).
+func TestLoadProgReadsIDFromFD(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	const progFD, progID = 42, 777
+	mockBpfProgAPI := mock_ebpf_progs.NewMockBpfProgAPIs(ctrl)
+	mockBpfProgAPI.EXPECT().LoadProg(gomock.Any()).Return(progFD, nil)
+	stubProgInfo(t, func(fd int) (ebpf_progs.BpfProgInfo, error) {
+		assert.Equal(t, progFD, fd)
+		return ebpf_progs.BpfProgInfo{ID: progID}, nil
+	})
+
+	pinPath := "/sys/fs/bpf/globals/aws/programs/test_prog"
+	elfLoader := &elfLoader{bpfProgApi: mockBpfProgAPI}
+	progs, err := elfLoader.loadProg(map[string]ebpf_progs.CreateEBPFProgInput{
+		pinPath: {ProgType: "tc_cls", ProgData: make([]byte, bpfInsDefSize), PinPath: pinPath, InsDefSize: bpfInsDefSize},
+	}, nil)
+	assert.NoError(t, err)
+	assert.Equal(t, progID, progs[pinPath].Program.ProgID)
+	assert.Equal(t, progFD, progs[pinPath].Program.ProgFD)
+}
+
+// A failed program info lookup keeps the underlying error.
+func TestLoadProgInfoErrorIsWrapped(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	infoErr := errors.New("injected")
+	mockBpfProgAPI := mock_ebpf_progs.NewMockBpfProgAPIs(ctrl)
+	mockBpfProgAPI.EXPECT().LoadProg(gomock.Any()).Return(42, nil)
+	stubProgInfo(t, func(int) (ebpf_progs.BpfProgInfo, error) { return ebpf_progs.BpfProgInfo{}, infoErr })
+
+	pinPath := "/sys/fs/bpf/globals/aws/programs/test_prog"
+	elfLoader := &elfLoader{bpfProgApi: mockBpfProgAPI}
+	_, err := elfLoader.loadProg(map[string]ebpf_progs.CreateEBPFProgInput{
+		pinPath: {ProgType: "tc_cls", ProgData: make([]byte, bpfInsDefSize), PinPath: pinPath, InsDefSize: bpfInsDefSize},
+	}, nil)
+	assert.ErrorIs(t, err, infoErr)
+}
+
 func TestSubprogramParseProg(t *testing.T) {
 	m := setup(t, "../../test-data/tc.subprog.bpf.elf")
 	defer m.ctrl.Finish()
@@ -911,7 +961,6 @@ func TestSubprogramParseProg(t *testing.T) {
 	m.ebpf_maps.EXPECT().CreateBPFMap(gomock.Any()).Return(ebpf_maps.BpfMap{MapFD: 5}, nil).AnyTimes()
 	m.ebpf_maps.EXPECT().GetBPFmapInfo(gomock.Any()).Return(ebpf_maps.BpfMapInfo{Id: 100}, nil).AnyTimes()
 	m.ebpf_maps.EXPECT().PinMap(gomock.Any(), gomock.Any()).AnyTimes()
-	m.ebpf_maps.EXPECT().GetMapFromPinPath(gomock.Any()).AnyTimes()
 
 	loadedMaps, err := elfLoader.loadMap(mapData)
 	assert.NoError(t, err)
@@ -990,7 +1039,6 @@ func TestChainedSubprogramParseProg(t *testing.T) {
 	m.ebpf_maps.EXPECT().CreateBPFMap(gomock.Any()).Return(ebpf_maps.BpfMap{MapFD: 5}, nil).AnyTimes()
 	m.ebpf_maps.EXPECT().GetBPFmapInfo(gomock.Any()).Return(ebpf_maps.BpfMapInfo{Id: 100}, nil).AnyTimes()
 	m.ebpf_maps.EXPECT().PinMap(gomock.Any(), gomock.Any()).AnyTimes()
-	m.ebpf_maps.EXPECT().GetMapFromPinPath(gomock.Any()).AnyTimes()
 
 	loadedMaps, err := elfLoader.loadMap(mapData)
 	assert.NoError(t, err)
@@ -1114,7 +1162,6 @@ func TestMultiProgramOneSectionParseProg(t *testing.T) {
 	m.ebpf_maps.EXPECT().CreateBPFMap(gomock.Any()).Return(ebpf_maps.BpfMap{MapFD: 7}, nil).AnyTimes()
 	m.ebpf_maps.EXPECT().GetBPFmapInfo(gomock.Any()).Return(ebpf_maps.BpfMapInfo{Id: 100}, nil).AnyTimes()
 	m.ebpf_maps.EXPECT().PinMap(gomock.Any(), gomock.Any()).AnyTimes()
-	m.ebpf_maps.EXPECT().GetMapFromPinPath(gomock.Any()).AnyTimes()
 
 	loadedMaps, err := elfLoader.loadMap(mapData)
 	assert.NoError(t, err)
@@ -1186,7 +1233,6 @@ func TestMultiProgramOneSectionWithSubprogRejected(t *testing.T) {
 	m.ebpf_maps.EXPECT().CreateBPFMap(gomock.Any()).Return(ebpf_maps.BpfMap{MapFD: 7}, nil).AnyTimes()
 	m.ebpf_maps.EXPECT().GetBPFmapInfo(gomock.Any()).Return(ebpf_maps.BpfMapInfo{Id: 100}, nil).AnyTimes()
 	m.ebpf_maps.EXPECT().PinMap(gomock.Any(), gomock.Any()).AnyTimes()
-	m.ebpf_maps.EXPECT().GetMapFromPinPath(gomock.Any()).AnyTimes()
 
 	loadedMaps, err := elfLoader.loadMap(mapData)
 	assert.NoError(t, err)
@@ -1226,7 +1272,6 @@ func TestMultiSubprogramWithDistinctSubprogsRejected(t *testing.T) {
 	m.ebpf_maps.EXPECT().CreateBPFMap(gomock.Any()).Return(ebpf_maps.BpfMap{MapFD: 7}, nil).AnyTimes()
 	m.ebpf_maps.EXPECT().GetBPFmapInfo(gomock.Any()).Return(ebpf_maps.BpfMapInfo{Id: 100}, nil).AnyTimes()
 	m.ebpf_maps.EXPECT().PinMap(gomock.Any(), gomock.Any()).AnyTimes()
-	m.ebpf_maps.EXPECT().GetMapFromPinPath(gomock.Any()).AnyTimes()
 
 	loadedMaps, err := elfLoader.loadMap(mapData)
 	assert.NoError(t, err)
@@ -1269,8 +1314,6 @@ func TestTextOnlyMapAssociation(t *testing.T) {
 	m.ebpf_maps.EXPECT().CreateBPFMap(gomock.Any()).Return(ebpf_maps.BpfMap{MapFD: textonlyFD}, nil).AnyTimes()
 	m.ebpf_maps.EXPECT().GetBPFmapInfo(gomock.Any()).Return(ebpf_maps.BpfMapInfo{Id: textonlyID}, nil).AnyTimes()
 	m.ebpf_maps.EXPECT().PinMap(gomock.Any(), gomock.Any()).AnyTimes()
-	// textonly_map is PIN_GLOBAL_NS, so loadMap resolves its ID via the pin path.
-	m.ebpf_maps.EXPECT().GetMapFromPinPath(gomock.Any()).Return(ebpf_maps.BpfMapInfo{Id: textonlyID}, nil).AnyTimes()
 
 	loadedMaps, err := elfLoader.loadMap(mapData)
 	assert.NoError(t, err)
@@ -1480,6 +1523,20 @@ func TestSubprogramRealKernelLoad(t *testing.T) {
 			assert.Equal(t, tt.wantProgs, len(progs), "loaded program count")
 			assert.Equal(t, tt.wantMaps, len(maps), "loaded map count")
 
+			// The returned IDs must be the kernel's IDs for the returned FDs.
+			for pinPath, d := range progs {
+				info, err := ebpf_progs.GetBPFprogInfo(d.Program.ProgFD)
+				if assert.NoError(t, err, "prog info for %s", pinPath) {
+					assert.Equal(t, int(info.ID), d.Program.ProgID, "ProgID for %s", pinPath)
+				}
+				for name, m := range d.Maps {
+					mapInfo, err := ebpf_maps.GetBPFmapInfo(int(m.MapFD))
+					if assert.NoError(t, err, "map info for %s", name) {
+						assert.Equal(t, mapInfo.Id, m.MapID, "MapID for %s", name)
+					}
+				}
+			}
+
 			if tt.wantMapName != "" {
 				// The map (including one referenced only from .text) must be
 				// associated with the loaded program via the kernel FD query.
@@ -1493,6 +1550,88 @@ func TestSubprogramRealKernelLoad(t *testing.T) {
 					"map %q must be associated with the loaded program", tt.wantMapName)
 			}
 		})
+	}
+}
+
+// TestLoadBpfFile_ConcurrentSameIdentifier verifies the fix for
+// aws-ebpf-sdk-go#167: when several LoadBpfFile calls run concurrently with
+// the same customizedPinPath the returned BpfData.Maps must be complete.
+// Before the fix, the pin-path read-back raced with concurrent PinMap calls
+// and could pick up a sibling's map ID, causing the post-load intersect to
+// drop the map silently.
+func TestLoadBpfFile_ConcurrentSameIdentifier(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("requires root to load programs in the kernel")
+	}
+	require.NoError(t, utils.Mount_bpf_fs())
+	t.Cleanup(func() { utils.Unmount_bpf_fs() })
+
+	const (
+		workers = 8
+		rounds  = 100
+		elfPath = "../../test-data/tc.ingress.bpf.elf"
+		ident   = "concurrent_test@ns"
+	)
+	client := New(Config{NamespacedMaps: testNamespacedMaps})
+	require.NoError(t, client.IncreaseRlimit())
+
+	// Serial baseline: record the expected map count for each program.
+	baseline, _, err := client.LoadBpfFile(elfPath, "serial_baseline@ns")
+	require.NoError(t, err, "serial baseline load failed")
+	// Map from program pin path suffix → expected map count.
+	const baselineIdent = "serial_baseline@ns"
+	wantMapCount := make(map[string]int, len(baseline))
+	for pinPath, d := range baseline {
+		if len(pinPath) > len(baselineIdent) {
+			wantMapCount[pinPath[len(baselineIdent):]] = len(d.Maps)
+		}
+	}
+	require.NotEmpty(t, wantMapCount, "baseline must have programs")
+
+	for r := 0; r < rounds; r++ {
+		shortMaps := make([]bool, workers)
+		wrongID := make([]bool, workers)
+		var wg sync.WaitGroup
+		for w := 0; w < workers; w++ {
+			wg.Add(1)
+			go func(idx int) {
+				defer wg.Done()
+				progs, _, loadErr := client.LoadBpfFile(elfPath, ident)
+				if loadErr != nil {
+					return // load error is acceptable; a short map set is not
+				}
+				for pinPath, d := range progs {
+					var suffix string
+					if len(pinPath) > len(ident) {
+						suffix = pinPath[len(ident):]
+					}
+					if want, ok := wantMapCount[suffix]; ok && len(d.Maps) < want {
+						shortMaps[idx] = true
+					}
+					for _, m := range d.Maps {
+						if m.MapFD == 0 {
+							wrongID[idx] = true
+							continue
+						}
+						info, infoErr := ebpf_maps.GetBPFmapInfo(int(m.MapFD))
+						if infoErr == nil && info.Id != m.MapID {
+							wrongID[idx] = true
+						}
+					}
+					if d.Program.ProgFD > 0 {
+						prog, progErr := ebpf_progs.GetBPFprogInfo(d.Program.ProgFD)
+						if progErr == nil && int(prog.ID) != d.Program.ProgID {
+							wrongID[idx] = true
+						}
+					}
+				}
+			}(w)
+		}
+		wg.Wait()
+		for w := 0; w < workers; w++ {
+			assert.False(t, shortMaps[w], "round %d worker %d: load returned a short map set", r, w)
+			assert.False(t, wrongID[w], "round %d worker %d: load returned a wrong map or program ID", r, w)
+		}
 	}
 }
 
@@ -1517,7 +1656,6 @@ func TestSubprogramInCustomSectionRejected(t *testing.T) {
 	m.ebpf_maps.EXPECT().CreateBPFMap(gomock.Any()).Return(ebpf_maps.BpfMap{MapFD: 5}, nil).AnyTimes()
 	m.ebpf_maps.EXPECT().GetBPFmapInfo(gomock.Any()).Return(ebpf_maps.BpfMapInfo{Id: 100}, nil).AnyTimes()
 	m.ebpf_maps.EXPECT().PinMap(gomock.Any(), gomock.Any()).AnyTimes()
-	m.ebpf_maps.EXPECT().GetMapFromPinPath(gomock.Any()).AnyTimes()
 	loadedMaps, err := elfLoader.loadMap(mapData)
 	assert.NoError(t, err)
 
@@ -1566,7 +1704,6 @@ func parseKfuncELF(t *testing.T, path string, resolver btf.KfuncResolver) (map[s
 	assert.NoError(t, err)
 	m.ebpf_maps.EXPECT().CreateBPFMap(gomock.Any()).Return(ebpf_maps.BpfMap{MapFD: 5}, nil).AnyTimes()
 	m.ebpf_maps.EXPECT().GetBPFmapInfo(gomock.Any()).Return(ebpf_maps.BpfMapInfo{Id: 100}, nil).AnyTimes()
-	m.ebpf_maps.EXPECT().GetMapFromPinPath(gomock.Any()).Return(ebpf_maps.BpfMapInfo{Id: 100}, nil).AnyTimes()
 	loadedMaps, err := elfLoader.loadMap(mapData)
 	assert.NoError(t, err)
 
@@ -1699,7 +1836,7 @@ func TestNoKfuncsSkipsResolver(t *testing.T) {
 	mapData, err := elfLoader.parseMap(BpfCustomData{})
 	assert.NoError(t, err)
 	m.ebpf_maps.EXPECT().CreateBPFMap(gomock.Any()).Return(ebpf_maps.BpfMap{MapFD: 5}, nil).AnyTimes()
-	m.ebpf_maps.EXPECT().GetMapFromPinPath(gomock.Any()).Return(ebpf_maps.BpfMapInfo{Id: 100}, nil).AnyTimes()
+	m.ebpf_maps.EXPECT().GetBPFmapInfo(gomock.Any()).Return(ebpf_maps.BpfMapInfo{Id: 100}, nil).AnyTimes()
 	loadedMaps, err := elfLoader.loadMap(mapData)
 	assert.NoError(t, err)
 
@@ -1775,12 +1912,12 @@ func TestLoadFailureReleasesCreatedObjects(t *testing.T) {
 		namespaced map[string]struct{}
 	}{
 		{name: "create ingress_map", failAt: "CreateBPFMap", n: 1},
-		{name: "get ingress_map from pin path", failAt: "GetMapFromPinPath", n: 1, wantMaps: []int{ingressMapFD}},
-		{name: "get global map from pin path", failAt: "GetMapFromPinPath", n: 2, wantMaps: []int{conntrackMapFD, ingressMapFD}},
+		{name: "get ingress_map info", failAt: "GetBPFmapInfo", n: 1, wantMaps: []int{ingressMapFD}},
+		{name: "get global map info", failAt: "GetBPFmapInfo", n: 2, wantMaps: []int{conntrackMapFD, ingressMapFD}},
 		{name: "create third map", failAt: "CreateBPFMap", n: 3, wantMaps: []int{ingressMapFD}},
 		{name: "load first program", failAt: "LoadProg", n: 1, wantMaps: []int{ingressMapFD}},
 		{name: "load third program", failAt: "LoadProg", n: 3, wantMaps: []int{ingressMapFD}, wantProgs: 2},
-		{name: "get program from pin path", failAt: "GetProgFromPinPath", n: 2, wantMaps: []int{ingressMapFD}, wantProgs: 2},
+		{name: "get program info", failAt: "progInfoByFD", n: 2, wantMaps: []int{ingressMapFD}, wantProgs: 2},
 		{name: "get associated map IDs", failAt: "GetBPFProgAssociatedMapsIDs", n: 1, wantMaps: []int{ingressMapFD}, wantProgs: 3},
 		{name: "pin prefix with underscore", failAt: "LoadProg", n: 1, wantMaps: []int{ingressMapFD}, prefix: "web_v2@ns"},
 		{name: "no namespaced maps configured", failAt: "LoadProg", n: 3, wantProgs: 2, namespaced: map[string]struct{}{}},
@@ -1802,8 +1939,8 @@ func TestLoadFailureReleasesCreatedObjects(t *testing.T) {
 				}
 				return ebpf_maps.BpfMap{MapFD: mapFDs[in.Name]}, nil
 			})
-			m.ebpf_maps.EXPECT().GetMapFromPinPath(gomock.Any()).AnyTimes().DoAndReturn(func(string) (ebpf_maps.BpfMapInfo, error) {
-				if fail("GetMapFromPinPath") {
+			m.ebpf_maps.EXPECT().GetBPFmapInfo(gomock.Any()).AnyTimes().DoAndReturn(func(uint32) (ebpf_maps.BpfMapInfo, error) {
+				if fail("GetBPFmapInfo") {
 					return ebpf_maps.BpfMapInfo{}, errInjected
 				}
 				return ebpf_maps.BpfMapInfo{}, nil
@@ -1815,11 +1952,11 @@ func TestLoadFailureReleasesCreatedObjects(t *testing.T) {
 				nextProgFD++
 				return nextProgFD, nil
 			})
-			m.ebpf_progs.EXPECT().GetProgFromPinPath(gomock.Any()).AnyTimes().DoAndReturn(func(string) (ebpf_progs.BpfProgInfo, int, error) {
-				if fail("GetProgFromPinPath") {
-					return ebpf_progs.BpfProgInfo{}, -1, errInjected
+			stubProgInfo(t, func(int) (ebpf_progs.BpfProgInfo, error) {
+				if fail("progInfoByFD") {
+					return ebpf_progs.BpfProgInfo{}, errInjected
 				}
-				return ebpf_progs.BpfProgInfo{}, -1, nil
+				return ebpf_progs.BpfProgInfo{}, nil
 			})
 			m.ebpf_progs.EXPECT().GetBPFProgAssociatedMapsIDs(gomock.Any()).AnyTimes().DoAndReturn(func(int) ([]uint32, error) {
 				if fail("GetBPFProgAssociatedMapsIDs") {
@@ -1872,9 +2009,9 @@ func TestLoadSuccessReleasesNothing(t *testing.T) {
 	defer m.ctrl.Finish()
 	released := recordReleases(t)
 	m.ebpf_maps.EXPECT().CreateBPFMap(gomock.Any()).AnyTimes().Return(ebpf_maps.BpfMap{MapFD: 101}, nil)
-	m.ebpf_maps.EXPECT().GetMapFromPinPath(gomock.Any()).AnyTimes()
+	m.ebpf_maps.EXPECT().GetBPFmapInfo(gomock.Any()).AnyTimes()
 	m.ebpf_progs.EXPECT().LoadProg(gomock.Any()).AnyTimes().Return(201, nil)
-	m.ebpf_progs.EXPECT().GetProgFromPinPath(gomock.Any()).AnyTimes().Return(ebpf_progs.BpfProgInfo{}, -1, nil)
+	stubProgInfo(t, func(int) (ebpf_progs.BpfProgInfo, error) { return ebpf_progs.BpfProgInfo{}, nil })
 	m.ebpf_progs.EXPECT().GetBPFProgAssociatedMapsIDs(gomock.Any()).AnyTimes()
 
 	f, err := os.Open(m.path)
@@ -2099,7 +2236,6 @@ func TestLoadFailureInParseProgReleasesMaps(t *testing.T) {
 	t.Cleanup(func() { sdkCache.Delete("kfunc_counters") })
 	m.ebpf_maps.EXPECT().CreateBPFMap(gomock.Any()).Return(ebpf_maps.BpfMap{MapFD: 5}, nil).AnyTimes()
 	m.ebpf_maps.EXPECT().GetBPFmapInfo(gomock.Any()).Return(ebpf_maps.BpfMapInfo{Id: 100}, nil).AnyTimes()
-	m.ebpf_maps.EXPECT().GetMapFromPinPath(gomock.Any()).Return(ebpf_maps.BpfMapInfo{Id: 100}, nil).AnyTimes()
 
 	f, err := os.Open(m.path)
 	assert.NoError(t, err)
